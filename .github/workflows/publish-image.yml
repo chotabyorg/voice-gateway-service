@@ -1,0 +1,60 @@
+name: Publish immutable GHCR image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed main commit to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: voice-gateway-ghcr-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - name: Verify exact current main SHA
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+      - name: Log in to GHCR with the repository token
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish one immutable source-SHA tag and record OCI digest
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:sha-${SOURCE_SHA}"
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "The immutable source tag already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          docker buildx create --name voice-gateway-publisher --driver docker-container --use
+          docker buildx inspect --bootstrap
+          docker buildx build --platform linux/amd64 --push \
+            --build-arg VCS_REF="$SOURCE_SHA" \
+            --tag "$IMAGE" --metadata-file /tmp/voice-image-metadata.json .
+          DIGEST="$(python -c 'import json; print(json.load(open("/tmp/voice-image-metadata.json"))["containerimage.digest"])')"
+          echo "Source SHA: $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "Image: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Immutable OCI digest: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source SHA: $SOURCE_SHA"
+          echo "Image: $IMAGE"
+          echo "Immutable OCI digest: $DIGEST"

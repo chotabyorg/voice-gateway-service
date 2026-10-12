@@ -1,0 +1,16 @@
+# Python 3.11 runtime closure, aligned with current Main Chota service pins.
+annotated-types==0.8.0
+anyio==4.15.1
+click==8.5.0
+fastapi==0.116.1
+h11==0.16.0
+idna==3.20
+pydantic==2.11.7
+pydantic-settings==2.11.0
+pydantic_core==2.33.2
+python-dotenv==1.2.4
+sniffio==1.3.1
+starlette==0.47.3
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.35.0

@@ -10,22 +10,6 @@ from tests.media.test_cleanup_regressions import executable
 from voice_gateway.media.providers.decoder import decode_audio_stream
 
 
-@pytest.fixture
-def children(monkeypatch):
-    processes = []
-    create = asyncio.create_subprocess_exec
-
-    async def track(*args, **kwargs):
-        process = await create(*args, **kwargs)
-        processes.append(process)
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", track)
-    yield processes
-    assert processes and all(process.returncode is not None for process in processes)
-    assert all(process.stdout.at_eof() and process.stderr.at_eof() for process in processes)
-
-
 async def source(data=b"encoded fixture"):
     yield data
 

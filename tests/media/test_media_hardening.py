@@ -75,6 +75,24 @@ async def test_immediate_reply_survives_end_of_playback():
     assert call.stt.chunks == [pcm(1500, 100)]
 
 
+@pytest.mark.parametrize("packet_bytes", [126, 320, 4096])
+async def test_acoustic_activity_uses_frames_instead_of_whole_packet_rms(packet_bytes):
+    call = active_call()
+    audio = pcm(700, 100) + pcm(0, 100)
+    for start in range(0, len(audio), packet_bytes):
+        await call.feed_audio(audio[start : start + packet_bytes])
+    # Whole-packet RMS is below the 500 onset threshold despite 100 ms of speech.
+    assert call.utterances.last_speech > 0
+    assert b"".join(call.stt.chunks) == audio
+
+
+async def test_activity_timestamp_excludes_silence_at_end_of_packet():
+    call = active_call()
+    before = time.monotonic()
+    await call.feed_audio(pcm(1200, 100) + pcm(0, 100))
+    assert before - 0.12 <= call.utterances.last_speech <= time.monotonic() - 0.08
+
+
 async def test_resistant_synthesis_cannot_block_input_or_emit_late_audio():
     entered, release, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
 

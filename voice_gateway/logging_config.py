@@ -19,6 +19,7 @@ class JsonFormatter(logging.Formatter):
         "audiosocket_port",
         "text_chars",
         "audio_ms",
+        "audio_bytes",
         "queue_ms",
         "duration_ms",
         "jitter_ms",

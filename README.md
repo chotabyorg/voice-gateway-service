@@ -49,6 +49,17 @@ The process integration tests use a real local TCP socket and OS process with
 deterministic fakes. Container CI additionally checks the built image, fake call,
 non-root runtime and graceful SIGTERM shutdown.
 
+For native media acceptance without Docker, credentials or external services:
+
+```sh
+python -m scripts.media_soak --rounds 120 --concurrency 8 --output media-soak.json
+```
+
+The script binds only an ephemeral loopback port, uses synthetic PCM/providers,
+checks call/resource cleanup and writes metadata-only latency/memory statistics.
+See [`docs/media-validation.md`](docs/media-validation.md) for reproducible checks,
+the recorded local result and the boundary between local and live acceptance.
+
 ## Optional provider adapters
 
 `voice_gateway/media/providers/` contains injectable OpenRouter STT/streaming
@@ -68,8 +79,8 @@ composition, bounds, cancellation behavior and the limits of local validation.
   decisions.
 - [`docs/artem-handoff.md`](docs/artem-handoff.md): Voice team scope and stop
   conditions.
-- [`docs/telephony-onboarding.md`](docs/telephony-onboarding.md): beta onboarding
-  proposal and questions for the platform/PBX owners; no approved routing contract.
+- [`docs/telephony-onboarding.md`](docs/telephony-onboarding.md): confirmed shared
+  ingress target, reservation/activation distinction and the pending contract gate.
 - [`docs/deployment-contract.md`](docs/deployment-contract.md): future
   deployment constraints only; no deployment resources.
 - [`AGENTS.md`](AGENTS.md): instructions future coding agents must follow.

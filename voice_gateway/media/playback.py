@@ -88,7 +88,7 @@ async def play_pcm_stream(
     *,
     on_frame=None,
     should_continue=lambda: True,
-    clock=time.monotonic,
+    clock=time.perf_counter,
     sleep=asyncio.sleep,
     control=None,
     emit=None,

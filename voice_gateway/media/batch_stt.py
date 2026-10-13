@@ -37,7 +37,7 @@ class BatchSTT(BaseSTT):
     """
 
     def __init__(self, *, vad=VADSettings(), queue=BatchSTTSettings(), emit=None):
-        self.vad = EnergyVAD(vad)
+        self.vad = EnergyVAD(vad, max_buffer_bytes=queue.max_utterance_bytes)
         self.queue = queue
         self.emit = lambda event, **values: emit_event(event, observer=emit, **values)
         self._speech_ended_at = self.final_speech_at = None
@@ -46,6 +46,8 @@ class BatchSTT(BaseSTT):
         self._last_transcription_task = None
         self._on_partial = self._on_final = self._on_eou = None
         self._accepting = True  # Also supports offline feed/flush with fake transcribe.
+        self._deliver_results = True
+        self._pending_frame = b""
 
     async def _open(self):
         pass
@@ -61,6 +63,8 @@ class BatchSTT(BaseSTT):
             raise RuntimeError("Cannot restart STT with pending work")
         self._on_partial, self._on_final, self._on_eou = on_partial, on_final, on_eou
         self._accepting = True
+        self._deliver_results = True
+        self._pending_frame = b""
         self.vad.reset()
         self._speech_ended_at = self.final_speech_at = None
         await self._open()
@@ -69,18 +73,35 @@ class BatchSTT(BaseSTT):
         if not self._accepting:
             raise RuntimeError("STT stream is stopped")
         validate_pcm(chunk)
-        for offset in range(0, len(chunk), PCM.frame_bytes):
-            ready = self.vad.feed(chunk[offset : offset + PCM.frame_bytes])
-            if self.vad.has_speech and self.vad.silence_ms == 0:
-                self._speech_ended_at = time.monotonic()
-            if ready:
-                await self._flush_utterance()
+        audio = self._pending_frame + chunk
+        end = len(audio) // PCM.frame_bytes * PCM.frame_bytes
+        self._pending_frame = audio[end:]
+        received_at = time.monotonic()
+        for offset in range(0, end, PCM.frame_bytes):
+            frame_end = offset + PCM.frame_bytes
+            await self._feed_frame(
+                audio[offset:frame_end],
+                received_at - (len(audio) - frame_end) / PCM.bytes_per_second,
+            )
+
+    async def _feed_frame(self, frame, ended_at):
+        try:
+            ready = self.vad.feed(frame)
+        except RuntimeError:
+            self.emit("stt_acoustic_buffer_rejected", audio_bytes=self.vad.buffer_bytes)
+            raise
+        if self.vad.has_speech and self.vad.silence_ms == 0:
+            self._speech_ended_at = ended_at
+        if ready:
+            await self._flush_utterance()
 
     def _reset_buffer(self):
         self.vad.reset()
+        self._pending_frame = b""
 
     async def _flush_utterance(self):
         if len(self._active_tasks) >= self.queue.max_pending:
+            self.emit("stt_backlog_rejected", pending_tasks=len(self._active_tasks))
             raise RuntimeError("Live transcription backlog exceeded; audio remains buffered")
         pcm = self.vad.take()
         if not pcm:
@@ -89,14 +110,20 @@ class BatchSTT(BaseSTT):
             self.emit("stt_utterance_rejected", audio_bytes=len(pcm))
             return
         task = asyncio.create_task(
-            self._transcribe_and_callback(pcm, self._last_transcription_task, self._speech_ended_at)
+            self._transcribe_and_callback(
+                pcm, self._last_transcription_task, self._speech_ended_at, time.monotonic()
+            )
         )
         self._last_transcription_task = task
         self._active_tasks.add(task)
+        self.emit("stt_queue_depth", pending_tasks=len(self._active_tasks))
         task.add_done_callback(self._active_tasks.discard)
 
-    async def _transcribe_and_callback(self, pcm, previous=None, speech_ended_at=None):
-        text, queued_at = "", time.monotonic()
+    async def _transcribe_and_callback(
+        self, pcm, previous=None, speech_ended_at=None, queued_at=None
+    ):
+        text = ""
+        queued_at = time.monotonic() if queued_at is None else queued_at
         try:
             async with self._request_slots:
                 started = time.monotonic()
@@ -119,14 +146,14 @@ class BatchSTT(BaseSTT):
                     raise
             except Exception:
                 pass
-        if text:
+        if text and self._deliver_results and not asyncio.current_task().cancelling():
             try:
                 # Transcripts are sensitive communication content; never log them.
                 self.emit("stt_final", text_chars=len(text), audio_ms=len(pcm) * 1000 // 16000)
                 if self._on_final:
                     self.final_speech_at = speech_ended_at
                     await self._on_final(text)
-                if self._on_eou:
+                if self._on_eou and self._deliver_results:
                     await self._on_eou()
             except Exception as exc:
                 self.emit("stt_callback_error", error_type=type(exc).__name__)
@@ -160,6 +187,9 @@ class BatchSTT(BaseSTT):
         failure = None
         drain_finished = False
         try:
+            tail, self._pending_frame = self._pending_frame, b""
+            if tail:
+                await self._feed_frame(tail, time.monotonic())
             if (
                 self.vad.speech_ms >= self.vad.settings.min_speech_ms
                 and len(self._active_tasks) < self.queue.max_pending
@@ -178,6 +208,7 @@ class BatchSTT(BaseSTT):
         except Exception as exc:
             failure = exc
         finally:
+            self._deliver_results = False
             tasks = tuple(self._active_tasks)
             if not drain_finished and tasks:
                 for task in tasks:
@@ -214,6 +245,7 @@ class BatchSTT(BaseSTT):
                 failure = failure or exc
                 self.emit("stt_client_close_error", error_type=type(exc).__name__)
             self._last_transcription_task = None
+            self._reset_buffer()
             self.emit("stt_stream_stopped")
         if cancellation is not None:
             raise cancellation

@@ -79,3 +79,11 @@ activate Goal4B/Telegram while working here.
 
 The default service stays inert. `VOICE_MODE=local_fake` is for deterministic
 local integration only. Provider adapters are not activated by this app.
+
+## Local media verification record
+
+The standalone hardening changes and native acceptance results are recorded in
+[`media-validation.md`](media-validation.md), including bounded queues, startup
+failure cleanup, packet-independent STT/VAD, cancellation, a 960-call loopback
+run and accelerated long-stream checks. Live provider quality and PBX acceptance
+remain explicitly separate from these local results and the Goal5 contract gate.

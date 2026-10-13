@@ -65,7 +65,20 @@ failure behavior; they do not establish a particular model's availability or qua
   idempotent. Existing EOF, idle and framing bounds remain in place.
 - VAD uses an adjustable release threshold (default 60% of the onset threshold)
   after the minimum voiced duration. This retains quieter speech endings without
-  promoting a short click. Batch STT processes input in 20 ms slices.
+  promoting a short click. Batch STT retains split frames and processes fixed
+  20 ms windows independently of PBX packet boundaries. Stop processes the final
+  partial window; restart clears it. Acoustic activity tracking also uses these
+  windows, estimating speech end before silence at the end of a packet.
+- STT enforces its byte bound before adding voiced audio to VAD, not only after
+  endpointing. The acoustic-final coordinator retains at most eight pending
+  fragments / 16,000 joined characters by default, plus one dispatched batch.
+  Saturation backpressures ordered STT callbacks. The existing bounded STT task
+  queue then rejects overload explicitly and the media call closes; no unbounded
+  queue or silent eviction of an accepted fragment is introduced. A provider
+  returning after its shutdown cancellation cannot issue another final callback.
+- Runtime owns connections and constructed adapters until `MediaCall.run` starts.
+  Factory errors close every resource already created. Rejected connections have
+  a close deadline; forced closes during shutdown run concurrently across calls.
 - Playback supports streamed PCM, split network samples and local gain ramps.
   Slow transport writes or provider stalls reset pacing rather than cause a burst.
   Gain pause/resume/duck mechanics are local; they introduce no platform commands.
@@ -97,6 +110,8 @@ frames already accepted by an AudioSocket peer or prove what the caller heard.
 Structured events contain counts, durations and error types:
 
 - `stt_request_timing`: provider duration and queue time.
+- `stt_queue_depth`, `stt_backlog_rejected`, `stt_acoustic_buffer_rejected`,
+  `media_utterance_backpressure`: bounded queue/buffer diagnostics, without text.
 - `media_first_audio`: synthesis start to first successful transport write.
 - `media_response_gap`: last locally observed voiced frame for that utterance to
   first successful transport write; includes endpointing, STT and local dispatch.
@@ -114,3 +129,7 @@ playback, interruption, non-cooperative cancellation, source failure, subprocess
 reaping, malformed audio and size/time limits. No paid API requests or real
 telephone calls are made. Russian recognition accuracy, voice naturalness,
 real-world latency and PBX echo remain live acceptance work.
+
+The native soak runner and offline acoustic acceptance are documented in
+[`media-validation.md`](media-validation.md). Playback pacing uses the monotonic
+high-resolution performance counter; scheduler latency is still OS-dependent.

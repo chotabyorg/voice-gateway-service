@@ -1,7 +1,6 @@
 """Real subprocess cleanup and transport uncertainty regressions."""
 
 import asyncio
-import os
 import sys
 
 import pytest
@@ -19,18 +18,8 @@ def executable(tmp_path, body):
     return (sys.executable, str(path))
 
 
-def process_is_gone(pid):
-    if os.name != "posix":
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    return False
-
-
 @pytest.mark.asyncio
-async def test_decoder_enforces_output_limit_and_reaps_child(tmp_path):
+async def test_decoder_enforces_output_limit_and_reaps_child(tmp_path, children):
     marker = tmp_path / "pid"
     command = executable(
         tmp_path,
@@ -43,11 +32,11 @@ async def test_decoder_enforces_output_limit_and_reaps_child(tmp_path):
     )
     with pytest.raises(ValueError, match="limit"):
         await decode_mp3(b"fixture", executable=command, max_output_bytes=1024)
-    assert process_is_gone(int(marker.read_text()))
+    assert children[-1].returncode is not None
 
 
 @pytest.mark.asyncio
-async def test_decoder_timeout_and_cancellation_reap_child(tmp_path):
+async def test_decoder_timeout_and_cancellation_reap_child(tmp_path, children):
     marker = tmp_path / "pid"
     command = executable(
         tmp_path,
@@ -55,18 +44,17 @@ async def test_decoder_timeout_and_cancellation_reap_child(tmp_path):
     )
     with pytest.raises(TimeoutError):
         await decode_mp3(b"fixture", executable=command, timeout=1)
-    assert process_is_gone(int(marker.read_text()))
+    assert children[-1].returncode is not None
 
     marker.unlink()
     task = asyncio.create_task(decode_mp3(b"fixture", executable=command, timeout=30))
     async with asyncio.timeout(2):
         while not marker.exists():
             await asyncio.sleep(0.005)
-    pid = int(marker.read_text())
     task.cancel("test cancellation")
     with pytest.raises(asyncio.CancelledError, match="test cancellation"):
         await task
-    assert process_is_gone(pid)
+    assert children[-1].returncode is not None
 
 
 @pytest.mark.asyncio

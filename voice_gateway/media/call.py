@@ -15,7 +15,7 @@ from voice_gateway.events import (
     PlaybackFact,
     PlaybackState,
 )
-from voice_gateway.media.audio import rms, validate_pcm
+from voice_gateway.media.audio import PCM, rms, validate_pcm
 from voice_gateway.media.completion import bounded_call, finish_owned_task, observe_task
 from voice_gateway.media.interruption import InterruptionDetector, InterruptionSettings
 from voice_gateway.media.interfaces import TransportIdleTimeout
@@ -45,6 +45,8 @@ class MediaSettings:
     max_call_seconds: float = 3600
     cleanup_timeout: float = 6
     max_tts_chars: int = 4000
+    max_pending_finals: int = 8
+    max_pending_final_chars: int = 16000
     max_playback_bytes: int = 8 * 1024 * 1024
     interrupt_timeout: float = 0.2
     smooth_barge_in: bool = True
@@ -58,6 +60,8 @@ class MediaSettings:
             or self.max_call_seconds <= 0
             or self.cleanup_timeout <= 0
             or self.max_tts_chars < 1
+            or self.max_pending_finals < 1
+            or self.max_pending_final_chars < 1
             or self.max_playback_bytes < 2
             or self.interrupt_timeout <= 0
         ):
@@ -100,6 +104,9 @@ class MediaCall:
             self._deliver_utterance,
             silence_seconds=settings.turn_silence_seconds,
             continuation_seconds=settings.continuation_seconds,
+            max_pending=settings.max_pending_finals,
+            max_pending_chars=settings.max_pending_final_chars,
+            emit=emit,
         )
         self.detector = InterruptionDetector(settings.interruption)
         self._speech_lock = asyncio.Lock()
@@ -112,6 +119,7 @@ class MediaCall:
         self._interrupt_ready.set()
         self._output_started = 0.0
         self._suppress_until = 0.0
+        self._activity_pending = b""
 
     def emit(self, event, **values):
         logger.info(event, extra={"event": event, **values})
@@ -231,6 +239,7 @@ class MediaCall:
     async def feed_audio(self, audio):
         validate_pcm(audio)
         if self._output is not None and not self._output.revoked.is_set():
+            self._activity_pending = b""
             if not self.settings.barge_in:
                 return
             event = self.detector.feed(audio, elapsed=time.monotonic() - self._output_started)
@@ -243,8 +252,16 @@ class MediaCall:
             return
         if time.monotonic() < self._suppress_until:
             return
-        if rms(audio) >= self.settings.speech_threshold:
-            self.utterances.speech()
+        samples = self._activity_pending + audio
+        end = len(samples) // PCM.frame_bytes * PCM.frame_bytes
+        self._activity_pending = samples[end:]
+        received_at = time.monotonic()
+        for offset in range(0, end, PCM.frame_bytes):
+            frame_end = offset + PCM.frame_bytes
+            if rms(samples[offset:frame_end]) >= self.settings.speech_threshold:
+                self.utterances.speech(
+                    ended_at=received_at - (len(samples) - frame_end) / PCM.bytes_per_second
+                )
         await self.stt.feed_audio(audio)
 
     async def speak(self, request_id, text, *, speech_ended_at=None):

@@ -10,6 +10,7 @@ from voice_gateway.events import AuthorizedSpeech
 from voice_gateway.media.audiosocket import AudioSocketTransport
 from voice_gateway.media.batch_stt import BatchSTT, BatchSTTSettings
 from voice_gateway.media.call import MediaCall, MediaSettings
+from voice_gateway.media.completion import bounded_call, finish_owned_task, observe_task
 from voice_gateway.media.interfaces import BaseTTS
 from voice_gateway.media.vad import VADSettings
 from voice_gateway.ports import VoiceToConversationPort
@@ -145,18 +146,23 @@ class VoiceGatewayRuntime:
                     "active_calls": len(tasks) - len(pending),
                 },
             )
+            # Force-close concurrently; the grace period must not grow per call.
+            await asyncio.gather(
+                *(
+                    self._close_unowned((("transport", self._sessions[task].close),))
+                    for task in pending
+                    if task in self._sessions
+                ),
+                return_exceptions=True,
+            )
             for task in pending:
-                transport = self._sessions.get(task)
-                if transport is not None:
-                    try:
-                        await asyncio.wait_for(transport.close(), timeout=1)
-                    except Exception:
-                        pass
                 task.cancel()
             if pending:
                 drained, still_pending = await asyncio.wait(pending, timeout=1)
                 done.update(drained)
                 if still_pending:
+                    for task in still_pending:
+                        task.add_done_callback(observe_task)
                     logger.error(
                         "voice_shutdown_tasks_pending",
                         extra={
@@ -184,22 +190,26 @@ class VoiceGatewayRuntime:
             idle_timeout=self.settings.audiosocket_idle_timeout_seconds,
         )
         if self._closing or len(self._sessions) >= self.settings.max_calls:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except ConnectionError:
-                pass
+            await finish_owned_task(
+                asyncio.create_task(self._close_unowned((("transport", transport.close),)))
+            )
             return
         if task is not None:
             self._sessions[task] = transport
+        unowned = [("transport", transport.close)]
         try:
+            stt = self.stt_factory()
+            unowned.append(("stt", stt.stop_stream))
+            tts = self.tts_factory()
+            unowned.append(("tts", tts.close))
             call = MediaCall(
                 transport,
-                self.stt_factory(),
-                self.tts_factory(),
+                stt,
+                tts,
                 self.conversation_port,
                 settings=MediaSettings(max_call_seconds=self.settings.max_call_seconds),
             )
+            unowned.clear()  # run() owns cleanup from its first suspension onward.
             await call.run()
         except asyncio.CancelledError:
             raise
@@ -212,5 +222,41 @@ class VoiceGatewayRuntime:
                 },
             )
         finally:
-            if task is not None:
-                self._sessions.pop(task, None)
+            try:
+                if unowned:
+                    await finish_owned_task(asyncio.create_task(self._close_unowned(unowned)))
+            finally:
+                if task is not None:
+                    self._sessions.pop(task, None)
+
+    async def _close_unowned(self, resources):
+        """Close a rejected/partially built call without skipping later resources."""
+        cancellation = None
+        for name, close in resources:
+            try:
+                completed = await bounded_call(
+                    close(),
+                    timeout=min(1, self.settings.shutdown_timeout_seconds),
+                    cancellation_grace=0,
+                )
+                if not completed:
+                    logger.warning(
+                        "media_cleanup_timeout",
+                        extra={
+                            "event": "media_cleanup_timeout",
+                            "resource": name,
+                        },
+                    )
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+            except Exception as exc:
+                logger.warning(
+                    "media_cleanup_error",
+                    extra={
+                        "event": "media_cleanup_error",
+                        "resource": name,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        if cancellation is not None:
+            raise cancellation

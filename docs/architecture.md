@@ -53,6 +53,11 @@ Conversation authority. There is no archive/recording requirement in this goal.
 Frames, VAD utterances, STT backlog and active calls have explicit in-memory
 bounds; writing audio to disk would add retention and cleanup risk without
 recoverable call semantics.
+The acoustic-final coordinator also has count/character bounds. A slow consumer
+backpressures STT callbacks; exhausting the bounded STT backlog fails the call
+explicitly. Shutdown clears pending acoustic data and fences late provider finals.
+Connections and adapters created before `MediaCall.run` are owned by the runtime
+and closed even when a later factory fails.
 Every inbound AudioSocket frame after the UUID handshake must arrive within the
 configured idle timeout; otherwise the transient call ends with a timeout reason
 and releases its admission slot. A transport EOF remains a disconnect.

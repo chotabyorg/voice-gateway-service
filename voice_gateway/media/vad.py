@@ -7,6 +7,7 @@ from .audio import PCM, rms, duration_ms
 @dataclass(frozen=True)
 class VADSettings:
     threshold: int = 500
+    release_ratio: float = 0.6
     silence_end_ms: int = 500
     min_speech_ms: int = 80
     preroll_ms: int = 200
@@ -15,6 +16,7 @@ class VADSettings:
     def __post_init__(self):
         if (
             self.threshold < 1
+            or not 0.5 <= self.release_ratio <= 1
             or self.min_speech_ms <= 0
             or self.silence_end_ms <= 0
             or self.preroll_ms < 0
@@ -39,7 +41,10 @@ class EnergyVAD:
         if not chunk:
             return False
         energy, milliseconds = rms(chunk), duration_ms(chunk)
-        if energy >= self.settings.threshold:
+        threshold = self.settings.threshold
+        if self.speech_ms >= self.settings.min_speech_ms:
+            threshold *= self.settings.release_ratio
+        if energy >= threshold:
             if not self.has_speech and self.preroll:
                 self.buffer.append(bytes(self.preroll))
                 self.buffer_ms += duration_ms(bytes(self.preroll))

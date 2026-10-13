@@ -51,9 +51,12 @@ class AudioSocketTransport(CallTransport):
                 validate_pcm(payload)
                 return payload
             if kind == FRAME_UUID:
-                self.call_id = str(uuid.UUID(bytes=payload))
-            elif kind in (FRAME_HANGUP, FRAME_ERROR):
+                if str(uuid.UUID(bytes=payload)) != self.call_id:
+                    raise ValueError("AudioSocket UUID changed during the call")
+            elif kind == FRAME_HANGUP:
                 return None
+            elif kind == FRAME_ERROR:
+                raise ConnectionError("AudioSocket peer reported a media error")
             elif 0x11 <= kind <= 0x18:
                 raise ValueError("AudioSocket sample rate unsupported; require PCM 8kHz")
             # DTMF and extension frames do not become audio.
@@ -64,7 +67,7 @@ class AudioSocketTransport(CallTransport):
         if len(chunk) > 65535:
             raise ValueError("AudioSocket payload exceeds frame limit")
         if self._closed:
-            return
+            raise ConnectionError("AudioSocket is closed")
         try:
             self._writer.write(struct.pack("!BH", FRAME_AUDIO, len(chunk)) + chunk)
             await self._writer.drain()

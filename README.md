@@ -51,12 +51,14 @@ non-root runtime and graceful SIGTERM shutdown.
 
 ## Optional provider adapters
 
-`voice_gateway/media/providers/` contains injectable Groq Whisper STT and Edge
-TTS adapters. Their SDKs are optional (`requirements-providers.txt`) and are not
-imported or called by the application. The Edge adapter uses an external ffmpeg
-decoder; any future provider composition must explicitly add and review that
-runtime dependency, limits and secret handling. No real provider key is needed
-for this repository's tests.
+`voice_gateway/media/providers/` contains injectable OpenRouter STT/streaming
+TTS, Groq Whisper STT and Edge TTS adapters. Dependencies are optional
+(`requirements-providers.txt`); the application does not instantiate them.
+OpenRouter and Edge TTS require an external ffmpeg decoder, which is not included
+in the default container. No real provider key is needed for the tests.
+
+See [`docs/provider-adapters.md`](docs/provider-adapters.md) for explicit
+composition, bounds, cancellation behavior and the limits of local validation.
 
 ## Architecture and handoff
 
@@ -66,6 +68,8 @@ for this repository's tests.
   decisions.
 - [`docs/artem-handoff.md`](docs/artem-handoff.md): Voice team scope and stop
   conditions.
+- [`docs/telephony-onboarding.md`](docs/telephony-onboarding.md): beta onboarding
+  proposal and questions for the platform/PBX owners; no approved routing contract.
 - [`docs/deployment-contract.md`](docs/deployment-contract.md): future
   deployment constraints only; no deployment resources.
 - [`AGENTS.md`](AGENTS.md): instructions future coding agents must follow.

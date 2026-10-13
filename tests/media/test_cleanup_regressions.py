@@ -16,7 +16,7 @@ def executable(tmp_path, body):
     path = tmp_path / "fake-decoder"
     path.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
     path.chmod(0o700)
-    return str(path)
+    return (sys.executable, str(path))
 
 
 def process_is_gone(pid):

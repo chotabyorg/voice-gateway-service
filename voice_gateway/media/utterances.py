@@ -56,15 +56,18 @@ class UtteranceCoordinator:
         self.changed = asyncio.Event()
         self.task = None
         self.closed = False
+        self.pending_speech_at = None
+        self.dispatched_speech_at = None
 
     def speech(self):
         self.last_speech = time.monotonic()
         self.changed.set()
 
-    async def submit(self, text):
+    async def submit(self, text, *, speech_ended_at=None):
         if self.closed or not text.strip():
             return
         self.pending.append(text.strip())
+        self.pending_speech_at = speech_ended_at
         self.deadline = time.monotonic() + (
             self.continuation_seconds if likely_unfinished(text) else 0
         )
@@ -83,6 +86,8 @@ class UtteranceCoordinator:
                 except TimeoutError:
                     continue
             text, self.pending = " ".join(self.pending), []
+            self.dispatched_speech_at = self.pending_speech_at
+            self.pending_speech_at = None
             try:
                 await self.callback(text)
             except Exception as exc:
@@ -90,6 +95,8 @@ class UtteranceCoordinator:
                     "voice_utterance_dispatch_failed",
                     extra={"error_type": type(exc).__name__},
                 )
+            finally:
+                self.dispatched_speech_at = None
 
     async def close(self):
         self.closed = True

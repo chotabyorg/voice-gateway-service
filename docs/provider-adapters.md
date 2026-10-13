@@ -77,6 +77,12 @@ failure behavior; they do not establish a particular model's availability or qua
   New playback waits for the previous interrupt's transport clear; if clear
   ignores cancellation, new output is rejected until that operation settles.
   A late clear therefore cannot erase a subsequent response.
+- Barge-in analyzes fixed 20 ms PCM windows across PBX packet boundaries. It
+  retains a partial window until more samples arrive, rather than averaging a
+  whole packet's silence and speech. Detection is quantized to 20 ms. On an
+  interruption, both the acoustic preroll and the remainder of the triggering
+  packet reach STT. Guard/calibration timing uses each frame's estimated end
+  relative to the packet's arrival; it is not a remote playback timestamp.
 - Default post-playback input suppression is now zero, preserving an immediate
   caller reply. Hosts can explicitly configure acoustic suppression if measured
   echo conditions require it; this is not an echo-cancellation algorithm.

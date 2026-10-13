@@ -94,7 +94,7 @@ async def test_resistant_synthesis_cannot_block_input_or_emit_late_audio():
         await asyncio.wait_for(entered.wait(), 1)
         await asyncio.wait_for(call.feed_audio(pcm(2000, 100)), 0.3)
         assert cancelled.is_set() and await asyncio.wait_for(output, 0.3) is False
-        assert call.stt.chunks == [pcm(2000, 100)]
+        assert b"".join(call.stt.chunks) == pcm(2000, 100)
         with pytest.raises(RuntimeError, match="still stopping"):
             await call.speak("new", "Next")
     finally:

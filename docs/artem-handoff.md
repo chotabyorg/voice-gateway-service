@@ -3,6 +3,30 @@
 This repository is the standalone Main Chota Voice Gateway foundation. Use
 `AGENTS.md` as the durable ownership and escalation policy.
 
+## Confirmed coordination gate — 2026-10-13
+
+The platform team owns the Conversation side and is completing Goal5 Turn
+Coordination. Wait for its acceptance and the team's frozen Voice/Conversation
+contract plus exact Conversation implementation revision. Do not infer the
+final Turn authority/fencing rules from the current seam or earlier channel code.
+
+Until that handoff, continue local media hardening only. Keep
+`VoiceToConversationPort` a local seam; do not connect legacy Speechik directly
+to AI, route the number pool into the new path, activate a VOICE integration,
+or change production routing/credentials.
+
+The confirmed target is shared Voice Gateway ingress for the team's number pool.
+The platform resolves a trusted DID binding to owner/integration/agent. A number
+reservation (`RESERVED`) remains distinct from an active VOICE integration;
+activation requires evidence for both routing readiness and the complete
+Voice/Conversation path. See `docs/telephony-onboarding.md`.
+
+After Goal5 acceptance, contract delivery and implementation, controlled acceptance
+scope is only `+375173820015`: real inbound call, STT, Conversation, managed AI,
+TTS/playback, interruption/barge-in and correct call termination. No other number
+is authorized for activation by this decision. This records a future acceptance
+scope, not permission to place a call or switch a route now.
+
 ## Artem / Voice team owns
 
 - PBX/provider transports and AudioSocket.

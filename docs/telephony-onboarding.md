@@ -1,79 +1,68 @@
-# Telephony onboarding proposal for platform owners
+# Supplied-number onboarding and Voice integration boundary
 
-Status: discussion input, updated 2026-10-13. Confirmed product constraint:
-the service operates in Belarus and always supplies the phone numbers itself.
-The UI and integration details below remain proposals, not an approved
-number-routing protocol, deployment plan or permission to activate calls.
+Status: target direction confirmed by the platform team on 2026-10-13.
+This supersedes the earlier assisted-onboarding proposal. It does not define a
+production wire protocol or authorize routing changes before the Goal5 handoff.
 
-## First beta
+## Customer flow and platform state
 
-Keep a small channel card labelled “Phone calls — beta, connection on request”.
-Suggested description: “We provide a phone number in Belarus and connect it to
-your AI agent. Connection is available on request.”
+Chota supplies Belarusian numbers from its own Business Network (`bn.by`) pool.
+The card belongs to the current agent's channels page. Customers provide a
+connection contact and number quantity; they do not configure SIP credentials,
+pick a second agent on that page, or bring their own carrier in this beta.
 
-The initial request needs the desired platform agent and a contact for onboarding.
-If multiple numbers are needed, optionally collect the quantity, defaulting to
-one. Reuse business details already available in the platform. Agent selection
-expresses the requested mapping and does not establish a working route.
+Pool reservation is implemented in Control Plane and exposed by the platform.
+`RESERVED` establishes allocation, not working telephony. A working `VOICE`
+integration is a separate platform state. The platform may activate it only
+after routing readiness and the complete Voice/Conversation path are proven.
+Voice must not promote a reservation or infer activation from SIP registration.
 
-Do not offer a country selector, bring-your-own-number, customer SIP/PBX or
-forwarding setup. The customer does not choose a carrier or submit SIP
-credentials or audio-provider API keys. Twilio is not part of this offering.
+## Confirmed target path
 
-The action should create/request onboarding rather than claim instant
-connection. Proposed visible progress: requested, waiting for details, technical
-test, connected. “Connected” should require an accepted inbound test through the
-intended route, not merely saved settings or successful SIP registration.
-Product state ownership and the request destination need platform-owner review.
+```text
+PBX / DID -> Voice Gateway -> Conversation -> managed AI
+managed AI -> Conversation -> Voice Gateway -> TTS/playback -> PBX / caller
+```
 
-A separate tab becomes useful when customers manage multiple numbers, per-number
-agents, routing, hours, human fallback destinations or call settings. For the
-first beta, these can be collected during assisted onboarding instead of making
-every customer complete a large technical form.
+Numbers in the pool should reach shared Voice Gateway ingress. The platform
+resolves a trusted called-number binding to owner/integration/agent. The goal is
+automatic assignment and readiness checks, without separate PBX setup for each
+customer. The mechanism for conveying trusted DID/call context is part of the
+pending platform contract; this document does not invent it.
 
-## Team-managed number provisioning
+AudioSocket currently carries a UUID plus audio in this repository. That UUID
+alone does not prove number ownership or identify an authorized platform agent.
+Existing MTS/direct-SIP pilot behavior and the old Speechik-to-AI adapter are
+donor references, not production integration contracts for this gateway.
+Do not reconnect legacy Speechik directly to AI.
 
-The team arranges a Belarusian number through its local telephony provider,
-configures the provider/PBX route and completes an inbound acceptance test.
-The customer sees the supplied number, selected agent and connection status.
-Number availability, price and connection time should be confirmed during
-onboarding; the card should not invent tariffs or promise immediate activation.
+## Ownership and the Goal5 gate
 
-Carrier/PBX credentials, SIP registration or trunk authentication, networking
-and media settings are managed internally by the team. They do not belong in
-the customer form. Providing the number does not by itself implement the
-trusted number-to-business/agent mapping described below.
+The platform team implements the Conversation side. It will deliver a frozen
+Voice/Conversation contract and an exact implementation revision after Goal5
+Turn Coordination acceptance, including the final authority/fencing semantics.
 
-[Asterisk AudioSocket](https://docs.asterisk.org/Latest_API/API_Documentation/Dialplan_Applications/AudioSocket/)
-transports PCM and identifies a call with a UUID; it does not provision a phone
-number or decide which platform agent owns the call.
+The Voice team owns PBX/AudioSocket, codecs, STT/TTS, VAD, interruption/barge-in,
+playback and the call/media lifecycle. Until that handoff:
 
-## Current implementation evidence and open boundary
+- Continue local media hardening with fake providers and loopback transports.
+- Keep `VoiceToConversationPort` and its events a local seam.
+- Do not invent Conversation endpoints or alter ManagedTurn/shared playback
+  contracts, canonical history, AI or Business/CRM ownership.
+- Do not route the number pool into the new path, activate integrations, add
+  production credentials or change the service's inert default.
 
-The inspected MTS `docs/telephony.md` at commit
-`8fd51c236bf43060a788778139a3fbbc4d223be9` describes a separately configured
-direct-SIP pilot with a server-selected workspace and internal extension.
-Its historical live-call evidence is not evidence of integration with this new
-Voice Gateway or of the current route of a public number. The older AudioSocket
-path is documented there as an unverified alternative.
+## Controlled acceptance after implementation
 
-This service currently accepts an AudioSocket UUID plus audio. It does not have
-trusted called-number/tenant/agent routing or production Conversation
-integration. Copying MTS workspace selection, Room state or prompts would create
-the wrong ownership boundary.
+The agreed future acceptance scope is one number: `+375173820015`.
+After Goal5 acceptance, frozen contract delivery and implementation, verify:
 
-Platform/Conversation and PBX owners need to agree on:
+1. An actual inbound call obtains the correct trusted owner/integration/agent.
+2. Caller audio goes through STT, Conversation and managed AI; authorized output
+   returns through Conversation to Voice for TTS and playback.
+3. Interruption/barge-in stops local output and reports the contract's playback
+   facts truthfully; generated audio is not proof of caller hearing.
+4. Hangup, failure and cancellation release the call's media resources.
 
-1. Ownership and validation of the number-to-business/agent mapping, including
-   ambiguous or unknown numbers and cross-business isolation.
-2. How a trusted call identity obtains that context before the local
-   `VoiceToConversationPort` is used; do not invent a public gateway protocol here.
-3. Supported inbound routes, call acceptance criteria, human fallback and the
-   behavior when the gateway or provider is unavailable.
-4. Product handling of history, recording/consent and demo business actions.
-
-An MTS demo can demonstrate the voice experience once its specific route and
-test conditions are approved. Label it as a separate beta demonstration until
-the new platform integration has been implemented and verified. This change
-does not edit salon prompts, create an agent, switch a number route or deploy
-either service.
+Keep all other numbers inactive. No live call, activation or routing switch is
+authorized before the Goal5 handoff by the confirmation of this target scheme.

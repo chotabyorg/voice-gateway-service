@@ -1,16 +1,24 @@
 # Telephony onboarding proposal for platform owners
 
-Status: discussion input, 2026-10-13. This is not an approved product contract,
+Status: discussion input, updated 2026-10-13. Confirmed product constraint:
+the service operates in Belarus and always supplies the phone numbers itself.
+The UI and integration details below remain proposals, not an approved
 number-routing protocol, deployment plan or permission to activate calls.
 
 ## First beta
 
 Keep a small channel card labelled “Phone calls — beta, connection on request”.
-The initial request needs country, existing number or need for a new number,
-carrier/PBX if known, desired platform agent and a technical contact. Existing
-numbers can be a small list; an agent selection expresses the requested mapping
-and does not establish a working route. Do not ask for provider audio API keys
-in this customer form.
+Suggested description: “We provide a phone number in Belarus and connect it to
+your AI agent. Connection is available on request.”
+
+The initial request needs the desired platform agent and a contact for onboarding.
+If multiple numbers are needed, optionally collect the quantity, defaulting to
+one. Reuse business details already available in the platform. Agent selection
+expresses the requested mapping and does not establish a working route.
+
+Do not offer a country selector, bring-your-own-number, customer SIP/PBX or
+forwarding setup. The customer does not choose a carrier or submit SIP
+credentials or audio-provider API keys. Twilio is not part of this offering.
 
 The action should create/request onboarding rather than claim instant
 connection. Proposed visible progress: requested, waiting for details, technical
@@ -23,22 +31,19 @@ agents, routing, hours, human fallback destinations or call settings. For the
 first beta, these can be collected during assisted onboarding instead of making
 every customer complete a large technical form.
 
-## Why there is no universal phone token
+## Team-managed number provisioning
 
-| Connection path | Customer supplies | Technical work |
-|---|---|---|
-| Existing number, forwarding available | Existing number, carrier and forwarding capabilities | Arrange a reachable destination, forwarding and an inbound test; verify which called/calling-number metadata survives. |
-| Existing SIP account, trunk or PBX | Carrier/PBX, numbers and technical contact | Confirm authentication mode and route, exchange the required SIP parameters securely, verify media reachability and test calls. |
-| New number | Country/region, number requirements and intended agent | Choose and provision a supported carrier/number, then configure and test the route. Availability and onboarding requirements depend on that carrier. |
+The team arranges a Belarusian number through its local telephony provider,
+configures the provider/PBX route and completes an inbound acceptance test.
+The customer sees the supplied number, selected agent and connection status.
+Number availability, price and connection time should be confirmed during
+onboarding; the card should not invent tariffs or promise immediate activation.
 
-For SIP, parameters may include registrar/server and port, domain, transport,
-username/auth ID and password **or** IP-based authentication. Outbound proxy,
-VPN/network restrictions and RTP/codec settings depend on the PBX. These belong
-in assisted technical setup, not one unconditional customer credential form.
-SIP credentials and OpenRouter keys serve different systems.
+Carrier/PBX credentials, SIP registration or trunk authentication, networking
+and media settings are managed internally by the team. They do not belong in
+the customer form. Providing the number does not by itself implement the
+trusted number-to-business/agent mapping described below.
 
-Examples from primary documentation: [Twilio SIP trunk configuration](https://www.twilio.com/docs/sip-trunking)
-separates phone-number attachment, SIP routing and authentication.
 [Asterisk AudioSocket](https://docs.asterisk.org/Latest_API/API_Documentation/Dialplan_Applications/AudioSocket/)
 transports PCM and identifies a call with a UUID; it does not provision a phone
 number or decide which platform agent owns the call.

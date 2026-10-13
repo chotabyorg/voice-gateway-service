@@ -74,6 +74,9 @@ failure behavior; they do not establish a particular model's availability or qua
   200 ms deadline. These are sequential budgets, not a single 200 ms SLA.
   A provider that ignores cancellation cannot write late audio or admit another
   concurrent output on the same call. Its pending task is observed until settled.
+  New playback waits for the previous interrupt's transport clear; if clear
+  ignores cancellation, new output is rejected until that operation settles.
+  A late clear therefore cannot erase a subsequent response.
 - Default post-playback input suppression is now zero, preserving an immediate
   caller reply. Hosts can explicitly configure acoustic suppression if measured
   echo conditions require it; this is not an echo-cancellation algorithm.

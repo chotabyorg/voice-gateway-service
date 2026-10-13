@@ -121,6 +121,52 @@ async def test_cancel_during_first_transport_write_reports_unknown():
     assert call.conversation_port.playback[-1].state == PlaybackState.UNKNOWN
 
 
+async def test_next_output_waits_for_previous_transport_clear():
+    clearing, release = asyncio.Event(), asyncio.Event()
+    call = active_call(settings=MediaSettings(smooth_barge_in=False))
+
+    async def clear():
+        clearing.set()
+        await release.wait()
+
+    call.transport.clear_output = clear
+    first = asyncio.create_task(call.speak("first", "Fixture"))
+    await call.transport.wrote.wait()
+    interruption = asyncio.create_task(call.interrupt())
+    await clearing.wait()
+    assert await first is False
+    sent = len(call.transport.sent)
+    second = asyncio.create_task(call.speak("second", "Fixture"))
+    await asyncio.sleep(0)
+    assert not second.done() and len(call.transport.sent) == sent
+    release.set()
+    await interruption
+    assert await second is True
+
+
+async def test_stubborn_transport_clear_cannot_erase_new_output():
+    release = asyncio.Event()
+    call = active_call(settings=MediaSettings(interrupt_timeout=0.01))
+
+    async def clear():
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                pass
+
+    call.transport.clear_output = clear
+    try:
+        await asyncio.wait_for(call.interrupt(), 0.3)
+        with pytest.raises(RuntimeError, match="still clearing"):
+            await call.speak("new", "Fixture")
+        assert not call.transport.sent
+    finally:
+        release.set()
+        await call._clear_output_task
+    assert await call.speak("after-clear", "Fixture") is True
+
+
 async def test_stream_starts_before_synthesis_finishes_and_closes_on_barge_in():
     closed = asyncio.Event()
 

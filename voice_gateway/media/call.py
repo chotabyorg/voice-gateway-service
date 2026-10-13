@@ -106,6 +106,10 @@ class MediaCall:
         self._output_task = None
         self._output = None
         self._retired_outputs = set()
+        self._clear_output_task = None
+        self._interrupt_count = 0
+        self._interrupt_ready = asyncio.Event()
+        self._interrupt_ready.set()
         self._output_started = 0.0
         self._suppress_until = 0.0
 
@@ -246,10 +250,13 @@ class MediaCall:
     async def speak(self, request_id, text, *, speech_ended_at=None):
         """Play locally authorized text; keep each output's counters isolated."""
         async with self._speech_lock:
+            await self._interrupt_ready.wait()
             if self.state != CallState.ACTIVE:
                 raise RuntimeError("Cannot speak outside an active media call")
             if self._retired_outputs:
                 raise RuntimeError("Previous provider output is still stopping")
+            if self._clear_output_task is not None and not self._clear_output_task.done():
+                raise RuntimeError("Previous transport output is still clearing")
             text = text.strip()
             if not text:
                 return True
@@ -433,26 +440,44 @@ class MediaCall:
 
     async def interrupt(self, *, reason="barge_in"):
         started = time.monotonic()
-        task, output = self._output_task, self._output
-        if output is not None and task is not None and not task.done():
-            output.reason = reason
-            if reason == "barge_in" and self.settings.smooth_barge_in and output.accepted:
-                output.control.stop()
-                await asyncio.wait({task}, timeout=min(0.06, self.settings.interrupt_timeout))
-            output.revoked.set()
-            await self._cancel_output(task)
+        self._interrupt_count += 1
+        self._interrupt_ready.clear()
         try:
-            completed = await bounded_call(
-                self.transport.clear_output(),
-                timeout=self.settings.interrupt_timeout,
-                cancellation_grace=0,
-            )
-            if not completed:
-                self.emit("media_clear_output_timeout")
+            task, output = self._output_task, self._output
+            if output is not None and task is not None and not task.done():
+                output.reason = reason
+                if reason == "barge_in" and self.settings.smooth_barge_in and output.accepted:
+                    output.control.stop()
+                    await asyncio.wait({task}, timeout=min(0.06, self.settings.interrupt_timeout))
+                output.revoked.set()
+                await self._cancel_output(task)
+            await self._clear_transport_output()
         finally:
+            self._interrupt_count -= 1
+            if not self._interrupt_count:
+                self._interrupt_ready.set()
             self.emit(
                 "media_interrupt_timing", duration_ms=round((time.monotonic() - started) * 1000)
             )
+
+    async def _clear_transport_output(self):
+        task = self._clear_output_task
+        if task is None or task.done():
+            task = asyncio.create_task(self.transport.clear_output(), name="voice-clear-output")
+            task.add_done_callback(observe_task)
+            self._clear_output_task = task
+        try:
+            done, _ = await asyncio.wait({task}, timeout=self.settings.interrupt_timeout)
+            if done:
+                task.result()
+            else:
+                if not task.cancelling():
+                    task.cancel()
+                self.emit("media_clear_output_timeout")
+        except asyncio.CancelledError:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+            raise
 
     async def _cleanup(self):
         # Close transport before draining STT so disconnect cannot leave a live read.

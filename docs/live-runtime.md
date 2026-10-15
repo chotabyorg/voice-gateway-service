@@ -88,3 +88,9 @@ provenance, RTP reachability, STT/TTS quality or Conversation acceptance. Native
 loopback verification and the one-number end-to-end acceptance remain separate
 from tests using a PJSUA2 double. No live carrier route is changed by choosing a
 mode in source code.
+
+On hangup, media cleanup aborts batch STT: it drops unsubmitted audio, cancels
+queued and in-flight requests and fences late results. Provider cancellation and
+close share a deadline of at most 0.5 seconds. This avoids retaining the single
+call slot for the normal five-second STT drain while a caller redials. Explicit
+offline `stop_stream()` still drains results; admission limits remain unchanged.

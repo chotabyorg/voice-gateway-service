@@ -34,6 +34,7 @@ class BatchSTT(BaseSTT):
 
     Backlog overflow fails explicitly and leaves the current utterance buffered.
     Stop drains accepted work up to a deadline, then cancels it and closes the client.
+    Abort discards buffered audio and cancels work immediately after a call ends.
     """
 
     def __init__(
@@ -177,7 +178,8 @@ class BatchSTT(BaseSTT):
             return ()
         done, pending = await asyncio.wait(tasks, timeout=timeout)
         for task in pending:
-            task.cancel("STT stream stopping")
+            if not task.cancelling():
+                task.cancel("STT stream stopping")
         if pending:
             cancelled, pending = await asyncio.wait(pending, timeout=cancellation_grace)
             done.update(cancelled)
@@ -188,26 +190,40 @@ class BatchSTT(BaseSTT):
         return tuple(pending)
 
     async def stop_stream(self):
+        await self._stop_stream(drain=True)
+
+    async def abort_stream(self):
+        await self._stop_stream(drain=False)
+
+    async def _stop_stream(self, *, drain):
         self._accepting = False
+        if not drain:
+            self._deliver_results = False
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.queue.shutdown_timeout
-        cancellation_grace = min(0.1, self.queue.shutdown_timeout / 4)
-        close_reserve = min(0.25, self.queue.shutdown_timeout / 4)
-        drain_timeout = max(0, self.queue.shutdown_timeout - cancellation_grace - close_reserve)
+        timeout = self.queue.shutdown_timeout if drain else min(0.5, self.queue.shutdown_timeout)
+        deadline = loop.time() + timeout
+        cancellation_grace = min(0.1, timeout / 4)
+        close_reserve = min(0.25, timeout / 4)
+        drain_timeout = max(0, timeout - cancellation_grace - close_reserve) if drain else 0
         cancellation = None
         failure = None
         drain_finished = False
         try:
             tail, self._pending_frame = self._pending_frame, b""
-            if tail:
+            if drain and tail:
                 await self._feed_frame(tail, time.monotonic())
             if (
-                self.vad.speech_ms >= self.vad.settings.min_speech_ms
+                drain
+                and self.vad.speech_ms >= self.vad.settings.min_speech_ms
                 and len(self._active_tasks) < self.queue.max_pending
             ):
                 await self._flush_utterance()
             tasks = tuple(self._active_tasks)
             if tasks:
+                if not drain:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel("Call ended; transcription no longer usable")
                 pending = await self._settle_tasks(
                     tasks, timeout=drain_timeout, cancellation_grace=cancellation_grace
                 )

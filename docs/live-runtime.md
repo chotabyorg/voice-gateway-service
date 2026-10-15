@@ -55,6 +55,16 @@ Supply `VOICE_SIP_SERVER` (trusted PBX IPv4 address), `DOMAIN`, `USERNAME`,
 These suffixes all use the `VOICE_SIP_` prefix. Credentials must stay in the
 protected service environment. Only PCMA/PCMU at 8 kHz are enabled.
 
+`VOICE_SIP_INPUT_GAIN` is an optional integer multiplier from 1 to 32 (default 1).
+Use it only after measuring an unusually quiet carrier input. It scales inbound
+PCM before VAD, STT and barge-in detection, preserves digital silence, and clips
+at PCM16 limits instead of wrapping. It never changes outbound speech. Fixed
+gain also raises background noise; it is not noise removal or automatic gain
+control. Verify quiet speech, idle noise and interruption on the selected line.
+Each call logs only input byte count, maximum frame RMS before gain and configured
+gain. Empty STT responses have a separate event; audio and transcripts stay out
+of logs. These diagnostics do not establish successful transcription or playback.
+
 The default DID source is the INVITE request URI from the configured PBX peer.
 `VOICE_SIP_CALLED_PARTY_HEADER=P-Called-Party-ID` or `X-Called-Number` is allowed
 only after proving the PBX overwrites that header with its trusted called DID.

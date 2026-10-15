@@ -20,6 +20,8 @@ class JsonFormatter(logging.Formatter):
         "text_chars",
         "audio_ms",
         "audio_bytes",
+        "audio_rms_max",
+        "input_gain",
         "queue_ms",
         "duration_ms",
         "jitter_ms",

@@ -60,6 +60,19 @@ def pcm_to_wav(chunk):
     return buffer.getvalue()
 
 
+def amplify_pcm(chunk, gain):
+    """Fixed, opt-in input gain; preserve silence and saturate PCM16 safely."""
+    validate_pcm(chunk)
+    if not isinstance(gain, int) or not 1 <= gain <= 32:
+        raise ValueError("Invalid input gain")
+    if gain == 1:
+        return chunk
+    output = array("h", (max(-32768, min(32767, v * gain)) for v in samples(chunk)))
+    if sys.byteorder != "little":
+        output.byteswap()
+    return output.tobytes()
+
+
 def mix_pcm(left, right):
     size = max(len(left), len(right)) // 2 * 2
     a, b = samples(left[:size].ljust(size, b"\0")), samples(right[:size].ljust(size, b"\0"))

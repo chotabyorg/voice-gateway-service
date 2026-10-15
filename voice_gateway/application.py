@@ -70,6 +70,10 @@ class VoiceGatewayRuntime:
         tts_factory=None,
     ):
         self.settings = settings
+        if settings.mode in {"live_audiosocket", "live_sip"} and any(
+            value is None for value in (conversation_port, stt_factory, tts_factory)
+        ):
+            raise ValueError("Live mode requires explicit Conversation and speech providers")
         self.conversation_port = conversation_port or LocalFakeConversationPort()
         self.stt_factory = stt_factory or (
             lambda: LocalFakeSTT(
@@ -83,7 +87,7 @@ class VoiceGatewayRuntime:
 
     @property
     def ready(self):
-        return self.settings.mode == "local_fake" and self.server is not None and not self._closing
+        return self.settings.mode != "disabled" and self.server is not None and not self._closing
 
     @property
     def bound_port(self):
@@ -182,13 +186,17 @@ class VoiceGatewayRuntime:
         logger.info("voice_shutdown_complete", extra={"event": "voice_shutdown_complete"})
 
     async def _handle_connection(self, reader, writer):
-        task = asyncio.current_task()
         transport = AudioSocketTransport(
             reader,
             writer,
             max_frame_bytes=self.settings.max_frame_bytes,
             idle_timeout=self.settings.audiosocket_idle_timeout_seconds,
         )
+        await self.handle_transport(transport)
+
+    async def handle_transport(self, transport):
+        """Own one accepted transport and all per-call resources."""
+        task = asyncio.current_task()
         if self._closing or len(self._sessions) >= self.settings.max_calls:
             await finish_owned_task(
                 asyncio.create_task(self._close_unowned((("transport", transport.close),)))

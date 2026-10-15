@@ -103,3 +103,36 @@ with a separate timeout scope per awaited operation. Buffered chunks cannot
 bypass an expired deadline. New regressions cover both task arrangements and
 actual decoder child/pipe cleanup. The complete suite now passes **154 tests**;
 the local soak record above remains the 2026-10-13 baseline.
+
+## Explicit live adapters — 2026-10-15
+
+The user extended scope to completing the Voice/Conversation integration. The
+historical ownership wait above is superseded by `artem-handoff.md`; acceptance
+of Goal5 and the exact deployed boundary remains outstanding.
+
+The host composition now supports explicit `live_audiosocket` and `live_sip`
+modes. Both resolve a trusted called DID through Control Plane before starting
+the Conversation path, and create real per-call STT/TTS clients. Defaults remain
+inert. SIP transfers/outbound calls are rejected, buffers and registrations are
+bounded, and an extension or caller ID cannot stand in for a called DID.
+
+Native `scripts/sip_loopback.py` ran with Python 3.12.3 / PJSIP 2.17 on the Voice
+host, entirely on ephemeral 127.0.0.1 SIP/RTP sockets. It verified REGISTER,
+INVITE/ACK, PCMA decoding to 33,280 PCM bytes, 104 returned RTP packets, BYE and
+zero retained sessions. This caught and fixed a SWIG lifetime error: borrowed
+media entries must retain their owning `CallInfo` until the media index is used.
+A deterministic regression now covers that failure. Existing services and
+carrier registration were untouched; this is not a real carrier-call result.
+
+`scripts/provider_smoke.py` used the existing server-side MTS OpenRouter profile
+for one synthetic Russian phrase: `elevenlabs/eleven-flash-v2.5`, voice `george`,
+then `nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b`. First decoded PCM took
+1,803 ms; all TTS audio took 1,912 ms for 5.77 seconds of speech. STT took 1,100 ms
+with one word edit across twelve reference words. No audio, transcript or key
+was saved or printed. This single synthetic probe demonstrates API compatibility,
+not corpus-level recognition quality or call latency.
+
+The local suite passes 184 tests, Ruff lint/format and the configured mypy
+boundary. Native verification used no Docker. A real inbound call through Main,
+carrier DID provenance, interruption/echo and the deployed source pair are still
+required before activating the test number or claiming end-to-end readiness.

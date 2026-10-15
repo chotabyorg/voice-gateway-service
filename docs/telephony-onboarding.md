@@ -1,8 +1,10 @@
 # Supplied-number onboarding and Voice integration boundary
 
 Status: target direction confirmed by the platform team on 2026-10-13.
-This supersedes the earlier assisted-onboarding proposal. It does not define a
-production wire protocol or authorize routing changes before the Goal5 handoff.
+This supersedes the earlier assisted-onboarding proposal. The user extended the
+implementation scope on 2026-10-15; see [current handoff](artem-handoff.md).
+The ownership wait recorded below is historical. Goal5, contract/runtime review
+and exact routing readiness remain technical gates before controlled activation.
 
 ## Customer flow and platform state
 

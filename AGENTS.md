@@ -1,5 +1,13 @@
 # Voice Gateway agent instructions
 
+The user explicitly authorized implementing both sides of the Voice/Conversation
+bridge on 2026-10-15, then completing the integration ourselves, including the
+controlled connection of +375173820015. Do not wait for another team to author
+the missing source. Keep separate reviewable PRs above Goal5 and verify the exact
+source/runtime pair before switching that one number. This does not authorize
+other numbers or unrelated Business/CRM changes. Keep the local port separate
+from the wire contract. Do native verification without local Docker.
+
 Read this file and `docs/architecture.md` before changing service ownership,
 provider activation, playback facts, or the Conversation boundary.
 

@@ -5,6 +5,13 @@ execution. It adapts bounded audio transport, VAD/end-of-speech, STT/TTS,
 playback and barge-in. It does not own canonical conversation history, AI or
 Business behavior.
 
+The explicitly injected [candidate Conversation HTTP adapter](docs/conversation-contract.md)
+keeps incoming final admission separate from response playback and implements
+bounded calls, leases, response correlation and truthful playback evidence.
+It requires a trusted platform binding resolver and the matching Conversation
+candidate above Goal5. The default service remains inert; this source does not
+activate a phone number or enable a production protocol.
+
 ## Safe local startup
 
 Python 3.11 is required. The app is inert by default and does not bind an

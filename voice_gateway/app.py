@@ -11,13 +11,17 @@ from voice_gateway.settings import Settings
 
 def create_app(settings=None, *, runtime=None):
     settings = settings or Settings()
+    if runtime is None and settings.mode in {"live_audiosocket", "live_sip"}:
+        from voice_gateway.live import build_live_runtime
+
+        runtime = build_live_runtime(settings)
     runtime = runtime or VoiceGatewayRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(_app):
         configure_logging()
-        await runtime.start()
         try:
+            await runtime.start()
             yield
         finally:
             await runtime.stop()
@@ -30,6 +34,11 @@ def create_app(settings=None, *, runtime=None):
         lifespan=lifespan,
     )
     app.state.runtime = runtime
+
+    if settings.mode == "live_audiosocket":
+        from voice_gateway.pbx_api import install_pbx_api
+
+        install_pbx_api(app, runtime.registry, runtime.pbx_token)
 
     @app.get("/health", include_in_schema=False)
     async def health():

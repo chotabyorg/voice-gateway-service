@@ -99,6 +99,38 @@ async def test_decoder_rejects_empty_or_incomplete_pcm(tmp_path, children, outpu
                 pass
 
 
+@pytest.mark.parametrize("separate_tasks", [False, True])
+async def test_decoder_deadline_survives_yield_without_cancelling_consumer(
+    tmp_path, children, separate_tasks
+):
+    command = executable(
+        tmp_path,
+        "import sys,time\n"
+        "sys.stdout.buffer.write(b'\\x01\\0' * 160)\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(30)",
+    )
+
+    async def consume():
+        async with aclosing(
+            decode_audio_stream(source(), executable=command, timeout=0.5)
+        ) as stream:
+            first = asyncio.create_task(anext(stream)) if separate_tasks else anext(stream)
+            assert await first == b"\x01\0" * 160
+            await asyncio.sleep(0.6)
+            read = asyncio.create_task(anext(stream))
+            try:
+                done, _ = await asyncio.wait({read}, timeout=1)
+                assert done, "Decoder lost its deadline when the first read task finished"
+                with pytest.raises(TimeoutError):
+                    await read
+            finally:
+                read.cancel()
+                await asyncio.gather(read, return_exceptions=True)
+
+    await asyncio.create_task(consume())
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="optional local ffmpeg is unavailable")
 async def test_real_ffmpeg_resamples_mp3_to_8khz_mono(children):

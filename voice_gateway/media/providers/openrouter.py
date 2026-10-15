@@ -7,11 +7,12 @@ history, or application activation. HTTP clients and decoder are injectable.
 import asyncio
 import base64
 import json
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
 
 from ..audio import pcm_to_wav, validate_pcm
 from ..batch_stt import BatchSTT
+from ..completion import deadline_timeout
 from ..interfaces import BaseTTS
 from .decoder import decode_audio_stream
 
@@ -176,43 +177,52 @@ class OpenRouterTTS(BaseTTS):
         body = {"model": self.settings.model, "input": text, "response_format": "mp3"}
         if self.settings.voice:
             body["voice"] = self.settings.voice
-        async with asyncio.timeout(self.settings.stream_timeout):
-            async with self.http.get().stream(
-                "POST",
-                BASE_URL + "/audio/speech",
-                json=body,
-                headers=self.http.headers,
-            ) as response:
-                _check_response(response, {"audio/mpeg", "audio/mp3", "application/octet-stream"})
+        deadline = asyncio.get_running_loop().time() + self.settings.stream_timeout
+        async with AsyncExitStack() as stack:
+            async with deadline_timeout(deadline):
+                response = await stack.enter_async_context(
+                    self.http.get().stream(
+                        "POST",
+                        BASE_URL + "/audio/speech",
+                        json=body,
+                        headers=self.http.headers,
+                    )
+                )
+            _check_response(response, {"audio/mpeg", "audio/mp3", "application/octet-stream"})
 
-                async def encoded():
-                    received = 0
-                    async for chunk in response.aiter_bytes(1024):
-                        received += len(chunk)
-                        if received > self.settings.max_mp3_bytes:
-                            raise ValueError("TTS audio exceeds configured limit")
-                        for offset in range(0, len(chunk), 65536):
-                            yield chunk[offset : offset + 65536]
-
+            async def encoded():
                 received = 0
-                async with aclosing(encoded()) as source:
-                    async with aclosing(
-                        self.decoder(
-                            source,
-                            max_input_bytes=self.settings.max_mp3_bytes,
-                            max_output_bytes=self.settings.max_pcm_bytes,
-                            timeout=self.settings.stream_timeout,
-                        )
-                    ) as decoded:
-                        async for pcm in decoded:
-                            validate_pcm(pcm)
-                            received += len(pcm)
-                            if received > self.settings.max_pcm_bytes or len(pcm) > 65536:
-                                raise ValueError("TTS PCM exceeds configured limit")
-                            if pcm:
-                                yield pcm
-                if not received:
-                    raise ValueError("TTS returned empty audio")
+                async for chunk in response.aiter_bytes(1024):
+                    received += len(chunk)
+                    if received > self.settings.max_mp3_bytes:
+                        raise ValueError("TTS audio exceeds configured limit")
+                    for offset in range(0, len(chunk), 65536):
+                        yield chunk[offset : offset + 65536]
+
+            received = 0
+            async with aclosing(encoded()) as source:
+                async with aclosing(
+                    self.decoder(
+                        source,
+                        max_input_bytes=self.settings.max_mp3_bytes,
+                        max_output_bytes=self.settings.max_pcm_bytes,
+                        timeout=self.settings.stream_timeout,
+                    )
+                ) as decoded:
+                    while True:
+                        async with deadline_timeout(deadline):
+                            try:
+                                pcm = await anext(decoded)
+                            except StopAsyncIteration:
+                                break
+                        validate_pcm(pcm)
+                        received += len(pcm)
+                        if received > self.settings.max_pcm_bytes or len(pcm) > 65536:
+                            raise ValueError("TTS PCM exceeds configured limit")
+                        if pcm:
+                            yield pcm
+            if not received:
+                raise ValueError("TTS returned empty audio")
 
     async def close(self):
         await self.http.close()

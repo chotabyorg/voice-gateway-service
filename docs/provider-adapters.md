@@ -133,3 +133,10 @@ real-world latency and PBX echo remain live acceptance work.
 The native soak runner and offline acoustic acceptance are documented in
 [`media-validation.md`](media-validation.md). Playback pacing uses the monotonic
 high-resolution performance counter; scheduler latency is still OS-dependent.
+
+Streaming HTTP and decoder deadlines bound each awaited operation against one
+absolute deadline. Timeout contexts do not span a yielded PCM chunk: they cannot
+cancel unrelated consumer work between reads, and changing the task that reads
+the next chunk cannot bypass the deadline. An expired stream raises on the next
+read even if bytes are already buffered. Consumers must close streams on early
+exit (the media playback owner uses `aclosing`).

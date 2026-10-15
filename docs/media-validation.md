@@ -92,3 +92,14 @@ on the process monotonic clock also have the host clock's resolution limits.
 
 No new Conversation, ManagedTurn, Message, AgentTurn, Business/CRM, shared
 playback semantics or GitOps changes are needed or included in this local work.
+
+## Pre-merge review — 2026-10-15
+
+Review found that a timeout context spanning an async-generator yield could
+cancel consumer playback between reads; when later reads ran in another task,
+it could instead stop enforcing the stream deadline. Both failure modes were
+reproduced before fixing HTTP TTS and decoder reads to use one absolute deadline
+with a separate timeout scope per awaited operation. Buffered chunks cannot
+bypass an expired deadline. New regressions cover both task arrangements and
+actual decoder child/pipe cleanup. The complete suite now passes **154 tests**;
+the local soak record above remains the 2026-10-13 baseline.

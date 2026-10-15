@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import wave
+from contextlib import aclosing
 
 import httpx
 import pytest
@@ -232,6 +233,43 @@ async def test_tts_timeout_closes_response_without_fallback():
     try:
         with pytest.raises(TimeoutError):
             await tts.synthesize("Fixture")
+        assert stream.closed
+    finally:
+        await tts.close()
+
+
+@pytest.mark.parametrize("separate_tasks", [False, True])
+@pytest.mark.parametrize("stall", [False, True])
+async def test_stream_deadline_is_owned_by_reads_not_the_consumer(separate_tasks, stall):
+    stream = AudioStream(stall=stall)
+    tts = OpenRouterTTS(
+        OpenRouterTTSSettings("fixture-key", "fixture/tts", stream_timeout=0.04),
+        client_factory=factory(
+            lambda req: httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=stream),
+            [],
+        ),
+        decoder=decode_fixture,
+    )
+
+    async def consume():
+        async with aclosing(tts.synthesize_stream("Fixture")) as output:
+            first = asyncio.create_task(anext(output)) if separate_tasks else anext(output)
+            assert await first == pcm(1000)
+            # A provider deadline must not cancel the caller while it handles
+            # the already-yielded frame, and must survive a change of read task.
+            await asyncio.sleep(0.08)
+            read = asyncio.create_task(anext(output))
+            try:
+                done, _ = await asyncio.wait({read}, timeout=0.1)
+                assert done, "The stream deadline disappeared with the first read task"
+                with pytest.raises(TimeoutError):
+                    await read
+            finally:
+                read.cancel()
+                await asyncio.gather(read, return_exceptions=True)
+
+    try:
+        await asyncio.create_task(consume())
         assert stream.closed
     finally:
         await tts.close()

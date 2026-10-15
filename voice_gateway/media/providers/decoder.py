@@ -2,7 +2,7 @@
 
 import asyncio
 
-from ..completion import bounded_call, finish_owned_task
+from ..completion import bounded_call, deadline_timeout, finish_owned_task
 
 
 async def decode_audio_stream(
@@ -15,6 +15,7 @@ async def decode_audio_stream(
 ):
     if timeout <= 0 or max_input_bytes < 1 or max_output_bytes < 2:
         raise ValueError("Invalid decoder bounds")
+    deadline = asyncio.get_running_loop().time() + timeout
     command = [executable] if isinstance(executable, str) else list(executable)
     process = await asyncio.create_subprocess_exec(
         *command,
@@ -68,16 +69,20 @@ async def decode_audio_stream(
     stderr = asyncio.create_task(drain_stderr(), name="voice-decoder-stderr")
     received, carry = 0, b""
     try:
-        async with asyncio.timeout(timeout):
-            while chunk := await process.stdout.read(3200):
-                received += len(chunk)
-                if received > max_output_bytes:
-                    raise ValueError("Decoded audio exceeds configured limit")
-                data = carry + chunk
-                end = len(data) // 2 * 2
-                carry = data[end:]
-                if end:
-                    yield data[:end]
+        while True:
+            async with deadline_timeout(deadline):
+                chunk = await process.stdout.read(3200)
+            if not chunk:
+                break
+            received += len(chunk)
+            if received > max_output_bytes:
+                raise ValueError("Decoded audio exceeds configured limit")
+            data = carry + chunk
+            end = len(data) // 2 * 2
+            carry = data[end:]
+            if end:
+                yield data[:end]
+        async with deadline_timeout(deadline):
             await feeder
             await stderr
             code = await process.wait()

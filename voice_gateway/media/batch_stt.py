@@ -136,6 +136,8 @@ class BatchSTT(BaseSTT):
                     queue_ms=round((started - queued_at) * 1000),
                     duration_ms=round((time.monotonic() - started) * 1000),
                 )
+                if not text:
+                    self.emit("stt_empty_result", audio_ms=len(pcm) * 1000 // 16000)
         except Exception as exc:
             self.emit("stt_transcribe_error", error_type=type(exc).__name__)
         if previous is not None:

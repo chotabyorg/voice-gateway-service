@@ -16,6 +16,7 @@ from uuid import uuid4
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from voice_gateway.media.audio import amplify_pcm, rms
 from voice_gateway.media.completion import finish_owned_task
 from voice_gateway.media.interfaces import CallTransport, TransportIdleTimeout
 from voice_gateway.routing import Registration, RoutingUnavailable
@@ -38,6 +39,7 @@ class SIPSettings(BaseSettings):
     max_calls: int = Field(default=2, ge=1, le=32)
     registration_timeout: float = Field(default=15, gt=0, le=60)
     media_idle_timeout: float = Field(default=30, gt=0, le=300)
+    input_gain: int = Field(default=1, ge=1, le=32)
     called_party_header: str = Field(default="", pattern=r"^(|P-Called-Party-ID|X-Called-Number)$")
 
     @model_validator(mode="after")
@@ -160,6 +162,8 @@ class SIPTransport(CallTransport):
         self.ready = asyncio.Event()
         self.disconnected = False
         self.media_port = None
+        self.input_bytes = self.input_rms_max = 0
+        self.input_reported = False
 
     async def prepare(self):
         await asyncio.wait_for(self.ready.wait(), 10)
@@ -171,8 +175,12 @@ class SIPTransport(CallTransport):
             async with asyncio.timeout(self.client.settings.media_idle_timeout):
                 while True:
                     pcm = self.audio.read()
-                    if pcm is None or pcm:
-                        return pcm
+                    if pcm is None:
+                        return None
+                    if pcm:
+                        self.input_bytes += len(pcm)
+                        self.input_rms_max = max(self.input_rms_max, rms(pcm))
+                        return amplify_pcm(pcm, self.client.settings.input_gain)
                     await asyncio.sleep(0.01)
         except TimeoutError:
             raise TransportIdleTimeout("SIP media idle timeout") from None
@@ -190,6 +198,17 @@ class SIPTransport(CallTransport):
 
     async def close(self):
         self.audio.close()
+        if not self.input_reported:
+            self.input_reported = True
+            logger.info(
+                "sip_input_summary",
+                extra={
+                    "event": "sip_input_summary",
+                    "audio_bytes": self.input_bytes,
+                    "audio_rms_max": self.input_rms_max,
+                    "input_gain": self.client.settings.input_gain,
+                },
+            )
         if not self.disconnected and self.call is not None:
             self.client.hangup(self.call)
 

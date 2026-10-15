@@ -6,6 +6,7 @@ recorded; only counters and lifecycle outcomes are printed.
 """
 
 import asyncio
+import argparse
 import json
 import re
 import socket
@@ -17,6 +18,7 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from voice_gateway.sip import SIPClient, SIPSettings  # noqa: E402
+from voice_gateway.media.audio import samples  # noqa: E402
 
 
 class Peer(asyncio.DatagramProtocol):
@@ -84,7 +86,7 @@ def call_diagnostic(call):
     }
 
 
-async def main():
+async def main(input_gain=1):
     loop = asyncio.get_running_loop()
     _, sip = await loop.create_datagram_endpoint(Peer, local_addr=("127.0.0.1", 0))
     _, rtp = await loop.create_datagram_endpoint(Peer, local_addr=("127.0.0.1", 0))
@@ -99,6 +101,7 @@ async def main():
         rtp_port=unused_port(even=True),
         registration_timeout=5,
         media_idle_timeout=5,
+        input_gain=input_gain,
     )
     received_pcm = bytearray()
     session_ended = asyncio.Event()
@@ -165,7 +168,7 @@ async def main():
         request("ACK", 1, target_uri=contact)
         for sequence in range(100):
             packet = struct.pack("!BBHII", 0x80, 8, sequence, sequence * 160, 123456)
-            rtp.transport.sendto(packet + b"\x80" * 160, ("127.0.0.1", media_port))
+            rtp.transport.sendto(packet + b"\xd7" * 160, ("127.0.0.1", media_port))
             await asyncio.sleep(0.02)
         packets = []
         while not rtp.messages.empty():
@@ -183,6 +186,8 @@ async def main():
                 )
             )
         assert received_pcm and any(received_pcm), "No decoded inbound PCM"
+        peak = max(abs(v) for v in samples(bytes(received_pcm)))
+        assert peak == 40 * input_gain, "Quiet PCMA input gain mismatch"
         assert any(
             len(packet) >= 172 and packet[1] & 0x7F == 8 and any(b != 0xD5 for b in packet[12:])
             for packet in packets
@@ -201,6 +206,8 @@ async def main():
                     "inbound_pcm_bytes": len(received_pcm),
                     "outbound_rtp_packets": len(packets),
                     "sessions_remaining": 0,
+                    "input_gain": input_gain,
+                    "inbound_pcm_peak": peak,
                 }
             )
         )
@@ -211,4 +218,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input-gain", type=int, default=1, choices=range(1, 33))
+    asyncio.run(main(parser.parse_args().input_gain))

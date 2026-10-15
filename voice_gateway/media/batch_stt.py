@@ -36,8 +36,13 @@ class BatchSTT(BaseSTT):
     Stop drains accepted work up to a deadline, then cancels it and closes the client.
     """
 
-    def __init__(self, *, vad=VADSettings(), queue=BatchSTTSettings(), emit=None):
-        self.vad = EnergyVAD(vad, max_buffer_bytes=queue.max_utterance_bytes)
+    def __init__(
+        self, *, vad=VADSettings(), queue=BatchSTTSettings(), emit=None, speech_classifier=None
+    ):
+        self.vad = EnergyVAD(
+            vad, max_buffer_bytes=queue.max_utterance_bytes, classifier=speech_classifier
+        )
+        self.uses_speech_classifier = speech_classifier is not None
         self.queue = queue
         self.emit = lambda event, **values: emit_event(event, observer=emit, **values)
         self._speech_ended_at = self.final_speech_at = None
@@ -48,6 +53,10 @@ class BatchSTT(BaseSTT):
         self._accepting = True  # Also supports offline feed/flush with fake transcribe.
         self._deliver_results = True
         self._pending_frame = b""
+
+    @property
+    def last_speech_at(self):
+        return self._speech_ended_at
 
     async def _open(self):
         pass

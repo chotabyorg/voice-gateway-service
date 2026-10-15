@@ -23,6 +23,16 @@ service environment, never source or browser settings. Selected provider
 dependencies and ffmpeg are required before the listener starts. Each call owns
 its speech clients; runtime shutdown drains calls then closes boundary clients.
 
+Optional `VOICE_LIVE_VAD=webrtc` selects a local WebRTC speech classifier instead
+of the default energy threshold. It operates on 20 ms, 8 kHz PCM frames and
+requires the pinned optional `webrtcvad-wheels` dependency. STT segmentation and
+the acoustic-final coordinator use the same speech activity clock, so background
+energy cannot keep postponing an already classified final. Playback interruption
+uses a separate per-call classifier plus its existing energy/duration guards.
+Preroll and the complete buffered utterance are preserved; classification does
+not remove samples from recognized speech. This is acoustic endpointing, not
+Conversation text settling or AgentTurn scheduling.
+
 The PBX adapter authenticates to `POST /internal/v1/pbx/calls` with `X-PBX-Token`
 and JSON `{ "call_id": "<UUID>", "number": "+375…" }`. It supplies a new UUID
 and the trusted called DID. Owner and agent fields are rejected. Registration is

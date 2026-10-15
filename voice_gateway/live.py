@@ -45,6 +45,7 @@ class LiveSettings(BaseSettings):
     stt_api_key: SecretStr
     stt_model: str = Field(min_length=1, max_length=200)
     stt_language: Literal["", "ru", "en", "be"] = "ru"
+    vad: Literal["energy", "webrtc"] = "energy"
     tts_provider: Literal["edge", "openrouter"]
     tts_api_key: SecretStr = SecretStr("")
     tts_model: str = Field(default="", max_length=200)
@@ -125,8 +126,15 @@ def build_live_runtime(settings, config=None):
             raise ValueError("Selected speech provider dependency is unavailable")
     if settings.mode == "live_sip" and importlib.util.find_spec("pjsua2") is None:
         raise ValueError("Native PJSUA2 is required for live SIP")
+    classifier_factory = None
+    if config.vad == "webrtc":
+        if importlib.util.find_spec("webrtcvad") is None:
+            raise ValueError("Selected WebRTC speech classifier is unavailable")
+        from voice_gateway.speech_activity import WebRTCSpeech
+
+        classifier_factory = WebRTCSpeech
     queue = BatchSTTSettings(max_pending=4)
-    vad = VADSettings(max_utterance_ms=30000)
+    vad = VADSettings(max_utterance_ms=30000, min_speech_ms=120 if classifier_factory else 80)
     if config.stt_provider == "groq":
         stt_config = GroqSTTSettings(
             api_key=config.stt_api_key.get_secret_value(),
@@ -135,7 +143,12 @@ def build_live_runtime(settings, config=None):
         )
 
         def stt_factory():
-            return GroqSTT(stt_config, vad=vad, queue=queue)
+            return GroqSTT(
+                stt_config,
+                vad=vad,
+                queue=queue,
+                speech_classifier=classifier_factory() if classifier_factory else None,
+            )
     else:
         stt_config = OpenRouterSTTSettings(
             api_key=config.stt_api_key.get_secret_value(),
@@ -144,7 +157,12 @@ def build_live_runtime(settings, config=None):
         )
 
         def stt_factory():
-            return OpenRouterSTT(stt_config, vad=vad, queue=queue)
+            return OpenRouterSTT(
+                stt_config,
+                vad=vad,
+                queue=queue,
+                speech_classifier=classifier_factory() if classifier_factory else None,
+            )
 
     if config.tts_provider == "edge":
         tts_config = EdgeTTSSettings(voice=config.tts_voice)
@@ -173,7 +191,11 @@ def build_live_runtime(settings, config=None):
         config.conversation_url, config.conversation_token, registry
     )
     runtime = LiveRuntime(
-        settings, conversation_port=conversation, stt_factory=stt_factory, tts_factory=tts_factory
+        settings,
+        conversation_port=conversation,
+        stt_factory=stt_factory,
+        tts_factory=tts_factory,
+        speech_classifier_factory=classifier_factory,
     )
     runtime.registry = registry
     runtime.pbx_token = config.pbx_token

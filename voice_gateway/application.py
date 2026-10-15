@@ -68,6 +68,7 @@ class VoiceGatewayRuntime:
         conversation_port: VoiceToConversationPort | None = None,
         stt_factory=None,
         tts_factory=None,
+        speech_classifier_factory=None,
     ):
         self.settings = settings
         if settings.mode in {"live_audiosocket", "live_sip"} and any(
@@ -81,6 +82,7 @@ class VoiceGatewayRuntime:
             )
         )
         self.tts_factory = tts_factory or LocalFakeTTS
+        self.speech_classifier_factory = speech_classifier_factory
         self.server = None
         self._sessions = {}
         self._closing = False
@@ -216,6 +218,9 @@ class VoiceGatewayRuntime:
                 tts,
                 self.conversation_port,
                 settings=MediaSettings(max_call_seconds=self.settings.max_call_seconds),
+                interruption_classifier=(
+                    self.speech_classifier_factory() if self.speech_classifier_factory else None
+                ),
             )
             unowned.clear()  # run() owns cleanup from its first suspension onward.
             await call.run()

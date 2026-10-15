@@ -88,6 +88,9 @@ that decision is handled by local barge-in and subsequent transport facts.
 Voice polls responses independently of admitting input; awaiting AI or speech
 must not prevent the caller's next final from reaching Conversation. Loss of the
 Conversation heartbeat stops active playback and releases media resources.
+Heartbeat also rejects HUMAN control, so a takeover stops the gateway. Removing
+the configured cohort prevents even a previously selected unmarked Turn from
+dispatching to AI; marked executions retain the existing UNKNOWN recovery path.
 
 Playback has ordered, immutable, idempotent event sequences and monotone PCM byte
 counters (8 MiB maximum per output). Facts remain recordable after call end or
@@ -127,6 +130,14 @@ It exercises complete playback, interruption/barge-in and call closure. It does
 not establish live provider quality, PBX routing readiness, heard speech, real AI
 Business safety or production readiness. All endpoints in this test are loopback;
 the fixture denies external sockets. No Docker is required locally.
+
+On native Windows, 16 existing buffered-close regressions in
+`tests/test_managed_http_resources.py` cannot establish their Linux TCP backpressure
+precondition: Winsock loopback accepts the entire bounded request before close.
+Do not weaken those assertions. Run them in the full Linux CI; for the remaining
+native suite, explicitly deselect the three parametrized buffered-close functions
+in that module. Its three partial-TLS cases run with Windows' selector loop.
+The Voice and cross-service acceptance tests require no platform deselection.
 
 Before activation: accept Goal5, independently review this contract/implementation
 and Voice history policy, pin both revisions, prove trusted DID routing and active

@@ -17,8 +17,10 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
 
 1. A configured provider transport supplies bounded PCM16 little-endian,
    8 kHz, mono frames. This repository currently includes the AudioSocket TCP
-   framing adapter. It validates the UUID handshake, frame size, sample rate,
-   and PCM sample alignment.
+   framing adapter and an explicit native inbound SIP host adapter. AudioSocket
+   validates the UUID handshake, frame size, sample rate and PCM sample alignment.
+   SIP validates the configured PBX peer and called DID, then shares the same
+   call owner and PCM pipeline. See [live runtime](live-runtime.md).
 2. `BatchSTT` keeps a bounded acoustic utterance in memory, applies energy VAD
    and end-of-speech, limits provider concurrency/backlog, and returns a final
    transcript through a callback.

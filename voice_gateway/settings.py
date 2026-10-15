@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VOICE_", extra="ignore")
 
-    mode: Literal["disabled", "local_fake"] = "disabled"
+    mode: Literal["disabled", "local_fake", "live_audiosocket", "live_sip"] = "disabled"
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8000, ge=1, le=65535)
     audiosocket_host: str = "127.0.0.1"

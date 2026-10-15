@@ -11,5 +11,5 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["voice_gateway/events.py", "voice_gateway/ports.py"]
+files = ["voice_gateway/events.py", "voice_gateway/ports.py", "voice_gateway/conversation_http.py"]
 strict = true

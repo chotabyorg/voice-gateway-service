@@ -120,6 +120,8 @@ class MediaCall:
         self._output_started = 0.0
         self._suppress_until = 0.0
         self._activity_pending = b""
+        self._response_task = None
+        self._boundary_failure_task = None
 
     def emit(self, event, **values):
         logger.info(event, extra={"event": event, **values})
@@ -156,9 +158,18 @@ class MediaCall:
                 )
                 self._call_started = True
                 self._state(CallState.ACTIVE)
+                if hasattr(self.conversation_port, "responses"):
+                    self._response_task = asyncio.create_task(
+                        self._receive_responses(), name="voice-conversation-responses"
+                    )
+                if hasattr(self.conversation_port, "wait_failure"):
+                    self._boundary_failure_task = asyncio.create_task(
+                        self.conversation_port.wait_failure(self._call_id()),
+                        name="voice-conversation-health",
+                    )
                 while True:
                     try:
-                        audio = await self.transport.read_audio_chunk()
+                        audio = await self._read_audio()
                     except TransportIdleTimeout:
                         self._end_reason = CallEndReason.TIMEOUT
                         break
@@ -189,6 +200,40 @@ class MediaCall:
 
     def _call_id(self):
         return getattr(self.transport, "call_id", "") or "transport-pending"
+
+    async def _read_audio(self):
+        monitors = {
+            task for task in (self._response_task, self._boundary_failure_task) if task is not None
+        }
+        if not monitors:
+            return await self.transport.read_audio_chunk()
+        reading = asyncio.create_task(self.transport.read_audio_chunk(), name="voice-media-read")
+        try:
+            done, _ = await asyncio.wait(monitors | {reading}, return_when=asyncio.FIRST_COMPLETED)
+            for task in monitors & done:
+                task.result()
+                raise RuntimeError("Conversation response stream ended")
+            return reading.result()
+        finally:
+            if not reading.done():
+                reading.cancel()
+            await asyncio.gather(reading, return_exceptions=True)
+
+    async def _receive_responses(self):
+        async with aclosing(self.conversation_port.responses(self._call_id())) as responses:
+            async for speech in responses:
+                if self.state != CallState.ACTIVE:
+                    return
+                await self.speak(speech.request_id, speech.text)
+
+    async def _stop_conversation_tasks(self):
+        tasks = [
+            task for task in (self._response_task, self._boundary_failure_task) if task is not None
+        ]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _notify_call_ended(self):
         event = CallEnded(self._call_id(), self._end_reason, time.monotonic_ns())
@@ -275,9 +320,10 @@ class MediaCall:
             if self._clear_output_task is not None and not self._clear_output_task.done():
                 raise RuntimeError("Previous transport output is still clearing")
             text = text.strip()
-            if not text:
-                return True
             output = _Output(request_id, speech_ended_at=speech_ended_at)
+            if not text:
+                await self._playback_fact(output, PlaybackState.NOT_STARTED, "empty_text")
+                return False
             if len(text) > self.settings.max_tts_chars:
                 await self._playback_fact(output, PlaybackState.FAILED, "text_limit")
                 raise ValueError("Speech text exceeds configured limit")
@@ -500,6 +546,7 @@ class MediaCall:
         # Close transport before draining STT so disconnect cannot leave a live read.
         resources = (
             ("output", lambda: self.interrupt(reason="disconnect")),
+            ("conversation", self._stop_conversation_tasks),
             ("utterances", self.utterances.close),
             ("transport", self.transport.close),
             ("stt", self.stt.stop_stream),

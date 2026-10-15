@@ -1,5 +1,11 @@
 # Voice Gateway agent instructions
 
+The user explicitly authorized implementing both sides of the Voice/Conversation
+source bridge on 2026-10-15. Keep this candidate integration in separate PRs above
+Goal5; production activation, number routing and GitOps remain separately gated.
+This authorizes the candidate HTTP adapter without making the local port itself
+a frozen production protocol. Do native verification without local Docker.
+
 Read this file and `docs/architecture.md` before changing service ownership,
 provider activation, playback facts, or the Conversation boundary.
 

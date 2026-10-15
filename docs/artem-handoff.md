@@ -3,6 +3,17 @@
 This repository is the standalone Main Chota Voice Gateway foundation. Use
 `AGENTS.md` as the durable ownership and escalation policy.
 
+## Source scope extension — 2026-10-15
+
+The user explicitly asked this agent to implement the Conversation side as well.
+The candidate HTTP bridge is now developed in separate branches above Goal5;
+see [candidate contract](conversation-contract.md). This supersedes the earlier
+source-only wait below, but does not claim Goal5 acceptance, freeze the contract,
+activate VOICE integrations, or permit a production routing/credential change.
+Conversation continues to own canonical Messages and AgentTurns. The typed local
+port stays separate from the candidate wire DTOs. Shared semantics require review
+before accepting these PRs and proceeding to the single controlled call.
+
 ## Confirmed coordination gate — 2026-10-13
 
 The platform team owns the Conversation side and is completing Goal5 Turn

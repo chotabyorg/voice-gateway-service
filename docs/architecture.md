@@ -8,8 +8,10 @@ flowchart LR
     C <--> AI[Managed AI\nreasoning · prompts · retrieval]
 ```
 
-The adapter shown above is a future local seam only. This foundation does not
-call Conversation, change its contracts, or send requests to Managed AI.
+The default app keeps this boundary local and inert. An explicitly injected
+candidate `ConversationHTTPPort` now implements the reviewable
+[Conversation contract](conversation-contract.md); it is not enabled by default
+and never calls Managed AI. Conversation owns the wire contract and canonical state.
 
 ## Responsibilities and flow
 
@@ -22,9 +24,12 @@ call Conversation, change its contracts, or send requests to Managed AI.
    transcript through a callback.
 3. `UtteranceCoordinator` can combine closely spaced acoustic finals. It is a
    media heuristic; it does not schedule or own a Main Chota `AgentTurn`.
-4. `VoiceToConversationPort` is the typed future seam for call start/end, final
+4. `VoiceToConversationPort` is the typed local seam for call start/end, final
    utterance, authorized assistant speech, and playback facts. It is a Python
    protocol plus local dataclasses, not a wire protocol.
+   The optional `StreamingConversationPort` separates asynchronous authorized
+   responses from final admission, so incoming speech can fence an in-flight AI
+   answer. Boundary failure is supervised alongside the PBX read and stops playback.
 5. The host Conversation boundary may return `AuthorizedSpeech`. Voice can
    synthesize only that text, pace PCM playback, detect barge-in and report
    transport facts.

@@ -91,7 +91,15 @@ class MediaCall:
     """
 
     def __init__(
-        self, transport, stt, tts, conversation_port, *, settings=MediaSettings(), emit=None
+        self,
+        transport,
+        stt,
+        tts,
+        conversation_port,
+        *,
+        settings=MediaSettings(),
+        emit=None,
+        interruption_classifier=None,
     ):
         self.transport, self.stt, self.tts = transport, stt, tts
         self.conversation_port, self.settings = conversation_port, settings
@@ -108,7 +116,9 @@ class MediaCall:
             max_pending_chars=settings.max_pending_final_chars,
             emit=emit,
         )
-        self.detector = InterruptionDetector(settings.interruption)
+        self.detector = InterruptionDetector(
+            settings.interruption, classifier=interruption_classifier
+        )
         self._speech_lock = asyncio.Lock()
         self._output_task = None
         self._output = None
@@ -296,6 +306,14 @@ class MediaCall:
                 await self.stt.feed_audio(chunk)
             return
         if time.monotonic() < self._suppress_until:
+            return
+        if getattr(self.stt, "uses_speech_classifier", False):
+            await self.stt.feed_audio(audio)
+            # A second, energy-only clock would let steady noise postpone a
+            # classified final forever, even after STT found the end of speech.
+            ended_at = self.stt.last_speech_at
+            if ended_at is not None and ended_at > self.utterances.last_speech:
+                self.utterances.speech(ended_at=ended_at)
             return
         samples = self._activity_pending + audio
         end = len(samples) // PCM.frame_bytes * PCM.frame_bytes

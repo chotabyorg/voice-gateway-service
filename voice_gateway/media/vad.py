@@ -26,8 +26,9 @@ class VADSettings:
 
 
 class EnergyVAD:
-    def __init__(self, settings=VADSettings(), *, max_buffer_bytes=1000000):
+    def __init__(self, settings=VADSettings(), *, max_buffer_bytes=1000000, classifier=None):
         self.settings = settings
+        self.classifier = classifier
         if max_buffer_bytes < 2:
             raise ValueError("Invalid VAD byte limit")
         self.max_buffer_bytes = max_buffer_bytes
@@ -48,11 +49,12 @@ class EnergyVAD:
         threshold = self.settings.threshold
         if self.speech_ms >= self.settings.min_speech_ms:
             threshold *= self.settings.release_ratio
-        if self.has_speech or energy >= threshold:
+        speech = self.classifier(chunk) if self.classifier is not None else energy >= threshold
+        if self.has_speech or speech:
             required = self.buffer_bytes + len(self.preroll) + len(chunk)
             if required > self.max_buffer_bytes:
                 raise RuntimeError("STT acoustic buffer exceeds configured byte limit")
-        if energy >= threshold:
+        if speech:
             if not self.has_speech and self.preroll:
                 self.buffer.append(bytes(self.preroll))
                 self.buffer_bytes += len(self.preroll)

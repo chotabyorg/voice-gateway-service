@@ -34,8 +34,9 @@ class Interruption:
 
 
 class InterruptionDetector:
-    def __init__(self, settings=InterruptionSettings()):
+    def __init__(self, settings=InterruptionSettings(), *, classifier=None):
         self.settings = settings
+        self.classifier = classifier
         self.echo_rms = 0
         self.reset()
 
@@ -87,7 +88,8 @@ class InterruptionDetector:
             limit = (policy.required_ms + policy.preroll_ms) * PCM.bytes_per_second // 1000
             while len(self.chunks) > 1 and sum(map(len, self.chunks[1:])) >= limit:
                 self.chunks.pop(0)
-        self.candidate_ms = self.candidate_ms + milliseconds if energy >= threshold else 0
+        speech = energy >= threshold and (self.classifier is None or self.classifier(chunk))
+        self.candidate_ms = self.candidate_ms + milliseconds if speech else 0
         if self.candidate_ms < policy.required_ms:
             return None
         event = Interruption(tuple(self.chunks), energy, threshold)

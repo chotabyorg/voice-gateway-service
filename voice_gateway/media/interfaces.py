@@ -60,6 +60,10 @@ class BaseSTT(ABC):
     async def stop_stream(self) -> None:
         """Drain or cancel outstanding requests and release provider resources."""
 
+    async def abort_stream(self) -> None:
+        """Stop an ended call; adapters may discard unusable pending results."""
+        await self.stop_stream()
+
 
 class BaseTTS(ABC):
     @abstractmethod

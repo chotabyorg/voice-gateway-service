@@ -561,13 +561,14 @@ class MediaCall:
             raise
 
     async def _cleanup(self):
-        # Close transport before draining STT so disconnect cannot leave a live read.
+        # Late STT cannot be admitted once the call leaves ACTIVE. Cancel it instead
+        # of occupying the SIP/runtime slot while waiting for an unusable result.
         resources = (
             ("output", lambda: self.interrupt(reason="disconnect")),
             ("conversation", self._stop_conversation_tasks),
             ("utterances", self.utterances.close),
             ("transport", self.transport.close),
-            ("stt", self.stt.stop_stream),
+            ("stt", getattr(self.stt, "abort_stream", self.stt.stop_stream)),
             ("tts", self.tts.close),
         )
         cancellation = None

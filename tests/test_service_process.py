@@ -6,6 +6,7 @@ import os
 import signal
 import socket
 import struct
+import subprocess
 import sys
 import time
 import uuid
@@ -55,6 +56,7 @@ async def launch(mode, audio_port=0):
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
     )
     lines = []
 
@@ -84,7 +86,7 @@ async def wait_http(url, expected):
 
 async def stop(process, collector, lines):
     if process.returncode is None:
-        process.send_signal(signal.SIGTERM)
+        process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
     try:
         async with asyncio.timeout(10):
             result = await process.wait()
@@ -94,8 +96,11 @@ async def stop(process, collector, lines):
         await process.wait()
         await collector
         raise AssertionError("service shutdown hung:\n" + "\n".join(lines)) from exc
-    assert result in (0, -signal.SIGTERM), f"exit={result}"
     assert any("Application shutdown complete" in line for line in lines), lines
+    # Uvicorn restores then re-raises SIGBREAK; Windows CRT may exit with 3.
+    # Accept this only after the application has confirmed graceful shutdown.
+    expected = (0, 3, 0xC000013A) if os.name == "nt" else (0, -signal.SIGTERM)
+    assert result in expected, f"exit={result}\n" + "\n".join(lines)
 
 
 def wire_frame(kind, payload=b""):

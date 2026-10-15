@@ -1,7 +1,7 @@
 """Provider-neutral interruption detector, including optional echo calibration."""
 
 from dataclasses import dataclass
-from .audio import duration_ms, rms, PCM
+from .audio import duration_ms, rms, validate_pcm, PCM
 
 
 @dataclass(frozen=True)
@@ -42,8 +42,31 @@ class InterruptionDetector:
     def reset(self):
         self.candidate_ms = 0.0
         self.chunks = []
+        self._pending = bytearray()
 
     def feed(self, chunk, *, elapsed=0):
+        """Analyze fixed 20 ms windows, retaining split frames and the event tail.
+
+        ``elapsed`` is playback age at the end of the received audio packet.
+        It is a local acoustic estimate, not a remote playback timestamp.
+        """
+        validate_pcm(chunk)
+        if not chunk:
+            return None
+        audio = bytes(self._pending) + chunk
+        self._pending.clear()
+        complete = len(audio) // PCM.frame_bytes * PCM.frame_bytes
+        for offset in range(0, complete, PCM.frame_bytes):
+            end = offset + PCM.frame_bytes
+            frame_elapsed = max(0, elapsed - (len(audio) - end) / PCM.bytes_per_second)
+            event = self._feed_frame(audio[offset:end], elapsed=frame_elapsed)
+            if event is not None:
+                tail = (audio[end:],) if end < len(audio) else ()
+                return Interruption(event.chunks + tail, event.rms, event.threshold)
+        self._pending.extend(audio[complete:])
+        return None
+
+    def _feed_frame(self, chunk, *, elapsed):
         energy, milliseconds = rms(chunk), duration_ms(chunk)
         policy = self.settings
         threshold = policy.min_rms

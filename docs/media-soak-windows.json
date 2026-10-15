@@ -1,0 +1,87 @@
+{
+  "created_at_utc": "2026-10-13T21:13:31.360550+00:00",
+  "scope": "native loopback; synthetic PCM, STT 30ms, TTS 40ms; no external services",
+  "platform": "Windows-10-10.0.26100-SP0",
+  "python": "3.11.0",
+  "rounds": 120,
+  "concurrency": 8,
+  "calls": 960,
+  "elapsed_seconds": 120.71,
+  "outcomes": {
+    "truncated_handshake": 80,
+    "disconnect_before_response": 80,
+    "barge_in": 80,
+    "completed": 720
+  },
+  "providers_created": {
+    "stt": 976,
+    "tts": 976
+  },
+  "providers_closed": {
+    "stt": 976,
+    "tts": 976
+  },
+  "active_calls_after_shutdown": 0,
+  "leaked_call_tasks": 0,
+  "native_resources_after_warmup": 205,
+  "native_resources_after_soak": 205,
+  "shutdown_with_live_calls_ms": 12.66,
+  "allocated_bytes_first_round": 338448,
+  "allocated_bytes_last_round": 566844,
+  "allocated_bytes_peak": 2087334,
+  "allocated_bytes_final_quarter_range": 21870,
+  "input_end_to_first_received_audio": {
+    "samples": 800,
+    "p50_ms": 79.92,
+    "p95_ms": 96.53,
+    "max_ms": 113.11
+  },
+  "received_frame_intervals": {
+    "samples": 4096,
+    "p50_ms": 28.61,
+    "p95_ms": 44.9,
+    "max_ms": 73.38
+  },
+  "media_timings": {
+    "media_first_audio": {
+      "samples": 808,
+      "p50_ms": 32,
+      "p95_ms": 47,
+      "max_ms": 63
+    },
+    "media_response_gap": {
+      "samples": 808,
+      "p50_ms": 578,
+      "p95_ms": 609,
+      "max_ms": 625
+    },
+    "media_interrupt_timing": {
+      "samples": 1056,
+      "p50_ms": 0,
+      "p95_ms": 62,
+      "max_ms": 63
+    }
+  },
+  "event_counts": {
+    "voice_runtime_ready": 1,
+    "media_call_state": 3824,
+    "stt_queue_depth": 968,
+    "stt_request_timing": 968,
+    "stt_final": 968,
+    "voice_final_utterance": 808,
+    "playback_pacing_stall": 983,
+    "media_first_audio": 808,
+    "media_response_gap": 808,
+    "voice_playback_fact": 1616,
+    "media_interrupt_timing": 1056,
+    "stt_stream_stopped": 976,
+    "voice_call_ended": 896,
+    "voice_call_failed": 80,
+    "voice_shutdown_started": 1,
+    "voice_listener_closed": 1,
+    "voice_sessions_cancelled": 1,
+    "voice_sessions_drained": 1,
+    "voice_listener_drained": 1,
+    "voice_shutdown_complete": 1
+  }
+}

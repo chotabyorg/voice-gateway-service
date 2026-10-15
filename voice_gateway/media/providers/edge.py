@@ -52,8 +52,9 @@ async def decode_mp3(
         raise ValueError("MP3 input exceeds configured limit")
     if timeout <= 0 or max_input_bytes < 1 or max_output_bytes < 2:
         raise ValueError("Invalid decoder bounds")
+    command = [executable] if isinstance(executable, str) else list(executable)
     proc = await asyncio.create_subprocess_exec(
-        executable,
+        *command,
         "-hide_banner",
         "-loglevel",
         "error",

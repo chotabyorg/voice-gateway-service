@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -14,11 +15,11 @@ from voice_gateway.events import (
     PlaybackFact,
     PlaybackState,
 )
-from voice_gateway.media.audio import rms, validate_pcm
-from voice_gateway.media.completion import bounded_call, finish_owned_task
+from voice_gateway.media.audio import PCM, rms, validate_pcm
+from voice_gateway.media.completion import bounded_call, finish_owned_task, observe_task
 from voice_gateway.media.interruption import InterruptionDetector, InterruptionSettings
 from voice_gateway.media.interfaces import TransportIdleTimeout
-from voice_gateway.media.playback import play_pcm
+from voice_gateway.media.playback import PlaybackControl, play_pcm_stream
 
 from .utterances import UtteranceCoordinator
 
@@ -38,13 +39,17 @@ class MediaSettings:
     speech_threshold: int = 500
     turn_silence_seconds: float = 0.5
     continuation_seconds: float = 0.9
-    post_playback_suppression_seconds: float = 0.8
+    post_playback_suppression_seconds: float = 0
     barge_in: bool = True
     interruption: InterruptionSettings = field(default_factory=InterruptionSettings)
     max_call_seconds: float = 3600
     cleanup_timeout: float = 6
     max_tts_chars: int = 4000
+    max_pending_finals: int = 8
+    max_pending_final_chars: int = 16000
     max_playback_bytes: int = 8 * 1024 * 1024
+    interrupt_timeout: float = 0.2
+    smooth_barge_in: bool = True
 
     def __post_init__(self):
         if (
@@ -55,9 +60,27 @@ class MediaSettings:
             or self.max_call_seconds <= 0
             or self.cleanup_timeout <= 0
             or self.max_tts_chars < 1
+            or self.max_pending_finals < 1
+            or self.max_pending_final_chars < 1
             or self.max_playback_bytes < 2
+            or self.interrupt_timeout <= 0
         ):
             raise ValueError("Invalid media call settings")
+
+
+@dataclass
+class _Output:
+    request_id: str
+    generated: int = 0
+    accepted: int = 0
+    last_progress: int = 0
+    writing: bool = False
+    transport_failed: bool = False
+    reason: str | None = None
+    revoked: asyncio.Event = field(default_factory=asyncio.Event)
+    control: PlaybackControl = field(default_factory=PlaybackControl)
+    started_at: float = field(default_factory=time.monotonic)
+    speech_ended_at: float | None = None
 
 
 class MediaCall:
@@ -81,17 +104,22 @@ class MediaCall:
             self._deliver_utterance,
             silence_seconds=settings.turn_silence_seconds,
             continuation_seconds=settings.continuation_seconds,
+            max_pending=settings.max_pending_finals,
+            max_pending_chars=settings.max_pending_final_chars,
+            emit=emit,
         )
         self.detector = InterruptionDetector(settings.interruption)
         self._speech_lock = asyncio.Lock()
         self._output_task = None
-        self._interrupt_reason = None
+        self._output = None
+        self._retired_outputs = set()
+        self._clear_output_task = None
+        self._interrupt_count = 0
+        self._interrupt_ready = asyncio.Event()
+        self._interrupt_ready.set()
         self._output_started = 0.0
         self._suppress_until = 0.0
-        self._generated_bytes = 0
-        self._accepted_bytes = 0
-        self._playback_started = False
-        self._last_progress_bytes = 0
+        self._activity_pending = b""
 
     def emit(self, event, **values):
         logger.info(event, extra={"event": event, **values})
@@ -174,7 +202,9 @@ class MediaCall:
 
     async def _final(self, text):
         if self.state == CallState.ACTIVE:
-            await self.utterances.submit(text)
+            await self.utterances.submit(
+                text, speech_ended_at=getattr(self.stt, "final_speech_at", None)
+            )
 
     async def _deliver_utterance(self, text):
         if self.state != CallState.ACTIVE:
@@ -198,13 +228,18 @@ class MediaCall:
             return
         if authorized_speech is not None:
             try:
-                await self.speak(authorized_speech.request_id, authorized_speech.text)
+                await self.speak(
+                    authorized_speech.request_id,
+                    authorized_speech.text,
+                    speech_ended_at=self.utterances.dispatched_speech_at,
+                )
             except Exception as exc:
                 self.emit("media_speech_error", error_type=type(exc).__name__)
 
     async def feed_audio(self, audio):
         validate_pcm(audio)
-        if self._output_task is not None:
+        if self._output is not None and not self._output.revoked.is_set():
+            self._activity_pending = b""
             if not self.settings.barge_in:
                 return
             event = self.detector.feed(audio, elapsed=time.monotonic() - self._output_started)
@@ -217,126 +252,183 @@ class MediaCall:
             return
         if time.monotonic() < self._suppress_until:
             return
-        if rms(audio) >= self.settings.speech_threshold:
-            self.utterances.speech()
+        samples = self._activity_pending + audio
+        end = len(samples) // PCM.frame_bytes * PCM.frame_bytes
+        self._activity_pending = samples[end:]
+        received_at = time.monotonic()
+        for offset in range(0, end, PCM.frame_bytes):
+            frame_end = offset + PCM.frame_bytes
+            if rms(samples[offset:frame_end]) >= self.settings.speech_threshold:
+                self.utterances.speech(
+                    ended_at=received_at - (len(samples) - frame_end) / PCM.bytes_per_second
+                )
         await self.stt.feed_audio(audio)
 
-    async def speak(self, request_id, text):
-        """Play only locally authorized text; return False when barge-in wins."""
+    async def speak(self, request_id, text, *, speech_ended_at=None):
+        """Play locally authorized text; keep each output's counters isolated."""
         async with self._speech_lock:
+            await self._interrupt_ready.wait()
             if self.state != CallState.ACTIVE:
                 raise RuntimeError("Cannot speak outside an active media call")
+            if self._retired_outputs:
+                raise RuntimeError("Previous provider output is still stopping")
+            if self._clear_output_task is not None and not self._clear_output_task.done():
+                raise RuntimeError("Previous transport output is still clearing")
             text = text.strip()
             if not text:
                 return True
-            self._generated_bytes = self._accepted_bytes = 0
-            self._playback_started = False
-            self._last_progress_bytes = 0
+            output = _Output(request_id, speech_ended_at=speech_ended_at)
             if len(text) > self.settings.max_tts_chars:
-                await self._playback_fact(request_id, PlaybackState.FAILED, "text_limit")
+                await self._playback_fact(output, PlaybackState.FAILED, "text_limit")
                 raise ValueError("Speech text exceeds configured limit")
             self.detector.reset()
             self.detector.echo_rms = 0
-            self._output_started = time.monotonic()
-            self._interrupt_reason = None
-            task = asyncio.create_task(self._produce(request_id, text), name="voice-playback")
+            self._output_started = output.started_at
+            self._output = output
+            task = asyncio.create_task(self._produce(output, text), name="voice-playback")
             self._output_task = task
-            interrupted = False
+            revoked = asyncio.create_task(output.revoked.wait())
             try:
-                await task
-                return True
-            except asyncio.CancelledError:
-                interrupted = self._interrupt_reason == "barge_in"
-                if interrupted:
-                    state = (
-                        PlaybackState.INTERRUPTED
-                        if self._accepted_bytes
-                        else PlaybackState.NOT_STARTED
-                    )
-                    await self._playback_fact(request_id, state, "barge_in")
+                await asyncio.wait({task, revoked}, return_when=asyncio.FIRST_COMPLETED)
+                if output.reason is not None:
+                    await self._interrupted_fact(output)
                     return False
-                if self._interrupt_reason == "disconnect":
-                    state = (
-                        PlaybackState.UNKNOWN if self._accepted_bytes else PlaybackState.NOT_STARTED
-                    )
-                    await self._playback_fact(request_id, state, "disconnect")
-                else:
-                    state = (
-                        PlaybackState.UNKNOWN if self._accepted_bytes else PlaybackState.NOT_STARTED
-                    )
-                    await self._playback_fact(request_id, state, "cancelled")
+                complete = task.result()
+                if complete:
+                    await self._playback_fact(output, PlaybackState.COMPLETED)
+                    return True
+                await self._playback_fact(output, PlaybackState.UNKNOWN, "incomplete_transport")
+                return False
+            except asyncio.CancelledError:
+                output.reason = output.reason or "cancelled"
+                output.revoked.set()
+                await self._cancel_output(task)
+                await self._interrupted_fact(output)
                 if asyncio.current_task().cancelling():
                     raise
                 return False
+            except Exception as exc:
+                await self._playback_fact(
+                    output,
+                    PlaybackState.UNKNOWN if output.transport_failed else PlaybackState.FAILED,
+                    "transport_" + type(exc).__name__
+                    if output.transport_failed
+                    else type(exc).__name__,
+                )
+                raise
             finally:
-                self._output_task = None
+                output.revoked.set()
+                revoked.cancel()
+                await asyncio.gather(revoked, return_exceptions=True)
+                if not task.done():
+                    if not task.cancelling():
+                        task.cancel()
+                    self._retire_output(task)
+                else:
+                    observe_task(task)
+                self._output_task = self._output = None
                 self.detector.reset()
                 self._suppress_until = time.monotonic() + (
                     0
-                    if interrupted or not self._accepted_bytes
+                    if output.reason or not output.accepted
                     else self.settings.post_playback_suppression_seconds
                 )
 
-    async def _produce(self, request_id, text):
-        transport_failure_reported = False
-        try:
-            audio = await self.tts.synthesize(text)
-            validate_pcm(audio)
-            self._generated_bytes = len(audio)
-            if self._generated_bytes > self.settings.max_playback_bytes:
-                raise ValueError("Generated audio exceeds configured limit")
-            if text and not audio:
+    async def _interrupted_fact(self, output):
+        if output.writing:
+            state = PlaybackState.UNKNOWN
+        elif output.accepted:
+            state = (
+                PlaybackState.INTERRUPTED if output.reason == "barge_in" else PlaybackState.UNKNOWN
+            )
+        else:
+            state = PlaybackState.NOT_STARTED
+        await self._playback_fact(output, state, output.reason)
+
+    async def _produce(self, output, text):
+        def active():
+            return not output.revoked.is_set() and self.state == CallState.ACTIVE
+
+        async def chunks():
+            if hasattr(self.tts, "synthesize_stream"):
+                async with aclosing(self.tts.synthesize_stream(text)) as stream:
+                    async for chunk in stream:
+                        if not active():
+                            raise asyncio.CancelledError
+                        validate_pcm(chunk)
+                        if len(chunk) > 65536:
+                            raise ValueError("TTS chunk exceeds configured limit")
+                        output.generated += len(chunk)
+                        if output.generated > self.settings.max_playback_bytes:
+                            raise ValueError("Generated audio exceeds configured limit")
+                        yield chunk
+            else:
+                audio = await self.tts.synthesize(text)
+                if not active():
+                    raise asyncio.CancelledError
+                validate_pcm(audio)
+                output.generated = len(audio)
+                if output.generated > self.settings.max_playback_bytes:
+                    raise ValueError("Generated audio exceeds configured limit")
+                for offset in range(0, len(audio), 65536):
+                    yield audio[offset : offset + 65536]
+            if not output.generated:
                 raise ValueError("TTS returned empty audio")
 
-            async def write(chunk):
-                nonlocal transport_failure_reported
-                try:
-                    await self.transport.write_audio_chunk(chunk)
-                except Exception as exc:
-                    transport_failure_reported = True
-                    await self._playback_fact(
-                        request_id, PlaybackState.UNKNOWN, f"transport_{type(exc).__name__}"
+        async def write(chunk):
+            if not active():
+                raise asyncio.CancelledError
+            output.writing = True
+            try:
+                await self.transport.write_audio_chunk(chunk)
+            except Exception:
+                output.transport_failed = True
+                raise
+            if not active():
+                raise asyncio.CancelledError
+            output.writing = False
+            first = output.accepted == 0
+            output.accepted += len(chunk)
+            if first:
+                now = time.monotonic()
+                self.emit("media_first_audio", duration_ms=round((now - output.started_at) * 1000))
+                if output.speech_ended_at is not None:
+                    self.emit(
+                        "media_response_gap",
+                        duration_ms=round((now - output.speech_ended_at) * 1000),
                     )
-                    raise
-                self._accepted_bytes += len(chunk)
-                state = (
-                    PlaybackState.STARTED if not self._playback_started else PlaybackState.PARTIAL
+            if first or output.accepted - output.last_progress >= 8000:
+                output.last_progress = output.accepted
+                await self._playback_fact(
+                    output,
+                    PlaybackState.STARTED if first else PlaybackState.PARTIAL,
                 )
-                self._playback_started = True
-                if (
-                    state == PlaybackState.STARTED
-                    or self._accepted_bytes - self._last_progress_bytes >= 8000
-                ):
-                    self._last_progress_bytes = self._accepted_bytes
-                    await self._playback_fact(request_id, state)
 
-            result = await play_pcm(audio, write)
-            if result.complete and self._accepted_bytes == self._generated_bytes:
-                await self._playback_fact(request_id, PlaybackState.COMPLETED)
-            else:
-                await self._playback_fact(request_id, PlaybackState.UNKNOWN, "incomplete_transport")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if not transport_failure_reported:
-                await self._playback_fact(request_id, PlaybackState.FAILED, type(exc).__name__)
-            raise
+        result = await play_pcm_stream(
+            chunks(),
+            write,
+            should_continue=active,
+            control=output.control,
+            max_bytes=self.settings.max_playback_bytes,
+            emit=self.emit,
+        )
+        return result.complete and active() and output.accepted == output.generated
 
-    async def _playback_fact(self, request_id, state, reason=None):
+    async def _playback_fact(self, output, state, reason=None):
         event = PlaybackFact(
             call_id=self._call_id(),
-            request_id=request_id,
+            request_id=output.request_id,
             state=state,
-            transport_accepted_bytes=self._accepted_bytes,
-            generated_bytes=self._generated_bytes,
+            transport_accepted_bytes=output.accepted,
+            generated_bytes=output.generated,
             occurred_at_monotonic_ns=time.monotonic_ns(),
             reason=reason,
         )
         self.emit(
             "voice_playback_fact",
             playback_state=state.value,
-            transport_accepted_bytes=self._accepted_bytes,
-            generated_bytes=self._generated_bytes,
+            transport_accepted_bytes=output.accepted,
+            generated_bytes=output.generated,
         )
         try:
             await self.conversation_port.playback_fact(event)
@@ -345,16 +437,64 @@ class MediaCall:
                 "conversation_port_error", operation="playback_fact", error_type=type(exc).__name__
             )
 
-    async def interrupt(self, *, reason="barge_in"):
-        task = self._output_task
-        if task is not None and not task.done():
-            self._interrupt_reason = reason
+    def _retire_output(self, task):
+        if task not in self._retired_outputs:
+            self._retired_outputs.add(task)
+            task.add_done_callback(self._retired_outputs.discard)
+            task.add_done_callback(observe_task)
+
+    async def _cancel_output(self, task):
+        if task is None or task.done():
+            return
+        if not task.cancelling():
             task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=self.settings.interrupt_timeout)
+        if done:
+            observe_task(task)
+        else:
+            self._retire_output(task)
+            self.emit("media_output_cancel_timeout")
+
+    async def interrupt(self, *, reason="barge_in"):
+        started = time.monotonic()
+        self._interrupt_count += 1
+        self._interrupt_ready.clear()
         try:
-            await self.transport.clear_output()
+            task, output = self._output_task, self._output
+            if output is not None and task is not None and not task.done():
+                output.reason = reason
+                if reason == "barge_in" and self.settings.smooth_barge_in and output.accepted:
+                    output.control.stop()
+                    await asyncio.wait({task}, timeout=min(0.06, self.settings.interrupt_timeout))
+                output.revoked.set()
+                await self._cancel_output(task)
+            await self._clear_transport_output()
         finally:
-            if task is not None:
-                await asyncio.gather(task, return_exceptions=True)
+            self._interrupt_count -= 1
+            if not self._interrupt_count:
+                self._interrupt_ready.set()
+            self.emit(
+                "media_interrupt_timing", duration_ms=round((time.monotonic() - started) * 1000)
+            )
+
+    async def _clear_transport_output(self):
+        task = self._clear_output_task
+        if task is None or task.done():
+            task = asyncio.create_task(self.transport.clear_output(), name="voice-clear-output")
+            task.add_done_callback(observe_task)
+            self._clear_output_task = task
+        try:
+            done, _ = await asyncio.wait({task}, timeout=self.settings.interrupt_timeout)
+            if done:
+                task.result()
+            else:
+                if not task.cancelling():
+                    task.cancel()
+                self.emit("media_clear_output_timeout")
+        except asyncio.CancelledError:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+            raise
 
     async def _cleanup(self):
         # Close transport before draining STT so disconnect cannot leave a live read.

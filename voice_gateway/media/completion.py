@@ -3,6 +3,17 @@
 import asyncio
 
 
+def deadline_timeout(deadline):
+    """Bound one awaited operation; never keep this context across a stream yield.
+
+    Check expiry synchronously too: an immediately available next chunk must not
+    bypass an elapsed deadline merely because it does not suspend the task.
+    """
+    if asyncio.get_running_loop().time() >= deadline:
+        raise TimeoutError("Media stream deadline exceeded")
+    return asyncio.timeout_at(deadline)
+
+
 def observe_task(task):
     if not task.cancelled():
         task.exception()

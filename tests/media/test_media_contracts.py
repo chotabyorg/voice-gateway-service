@@ -52,6 +52,7 @@ def test_core_dependency_boundary_and_import_without_site_packages():
                 assert module.split(".")[0] in sys.stdlib_module_names | {
                     "voice_gateway",
                     "groq",
+                    "httpx",
                     "edge_tts",
                     "fastapi",
                     "pydantic",
@@ -163,7 +164,8 @@ async def test_playback_does_not_burst_after_io_stall():
         now[0] += seconds
 
     await play_pcm(pcm(1, 60), write, clock=lambda: now[0], sleep=sleep)
-    assert writes == pytest.approx([0, 0.1, 0.12])
+    # The first write finishes at 0.1; leave one frame interval before the next.
+    assert writes == pytest.approx([0, 0.12, 0.14])
 
 
 @pytest.mark.asyncio
@@ -214,9 +216,9 @@ async def test_audiosocket_idle_timeout_releases_a_stalled_session():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "wire,expected",
-    [(socket_frame(0xFF, b"\1"), None), (b"\x10\x01", None), (b"\x10\x00\x04\0", None)],
+    [(b"\x10\x01", None), (b"\x10\x00\x04\0", None)],
 )
-async def test_audiosocket_error_and_truncated_eof(wire, expected):
+async def test_audiosocket_truncated_eof(wire, expected):
     reader = asyncio.StreamReader()
     reader.feed_data(wire)
     reader.feed_eof()

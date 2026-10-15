@@ -1,3 +1,4 @@
 # Optional adapters only. The default app never imports or calls these providers.
 edge-tts==7.2.8
 groq==1.7.0
+httpx==0.28.1

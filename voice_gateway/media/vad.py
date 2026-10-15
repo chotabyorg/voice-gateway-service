@@ -7,6 +7,7 @@ from .audio import PCM, rms, duration_ms
 @dataclass(frozen=True)
 class VADSettings:
     threshold: int = 500
+    release_ratio: float = 0.6
     silence_end_ms: int = 500
     min_speech_ms: int = 80
     preroll_ms: int = 200
@@ -15,6 +16,7 @@ class VADSettings:
     def __post_init__(self):
         if (
             self.threshold < 1
+            or not 0.5 <= self.release_ratio <= 1
             or self.min_speech_ms <= 0
             or self.silence_end_ms <= 0
             or self.preroll_ms < 0
@@ -24,12 +26,16 @@ class VADSettings:
 
 
 class EnergyVAD:
-    def __init__(self, settings=VADSettings()):
+    def __init__(self, settings=VADSettings(), *, max_buffer_bytes=1000000):
         self.settings = settings
+        if max_buffer_bytes < 2:
+            raise ValueError("Invalid VAD byte limit")
+        self.max_buffer_bytes = max_buffer_bytes
         self.reset()
 
     def reset(self):
         self.buffer = []
+        self.buffer_bytes = 0
         self.buffer_ms = self.silence_ms = self.speech_ms = 0.0
         self.has_speech = False
         self.preroll = bytearray()
@@ -39,23 +45,36 @@ class EnergyVAD:
         if not chunk:
             return False
         energy, milliseconds = rms(chunk), duration_ms(chunk)
-        if energy >= self.settings.threshold:
+        threshold = self.settings.threshold
+        if self.speech_ms >= self.settings.min_speech_ms:
+            threshold *= self.settings.release_ratio
+        if self.has_speech or energy >= threshold:
+            required = self.buffer_bytes + len(self.preroll) + len(chunk)
+            if required > self.max_buffer_bytes:
+                raise RuntimeError("STT acoustic buffer exceeds configured byte limit")
+        if energy >= threshold:
             if not self.has_speech and self.preroll:
                 self.buffer.append(bytes(self.preroll))
+                self.buffer_bytes += len(self.preroll)
                 self.buffer_ms += duration_ms(bytes(self.preroll))
                 self.preroll.clear()
             self.buffer.append(chunk)
+            self.buffer_bytes += len(chunk)
             self.buffer_ms += milliseconds
             self.speech_ms += milliseconds
             self.silence_ms = 0
             self.has_speech = True
         elif self.has_speech:
             self.buffer.append(chunk)
+            self.buffer_bytes += len(chunk)
             self.buffer_ms += milliseconds
             self.silence_ms += milliseconds
         else:
             self.preroll.extend(chunk)
-            limit = self.settings.preroll_ms * PCM.bytes_per_second // 1000
+            limit = min(
+                self.settings.preroll_ms * PCM.bytes_per_second // 1000,
+                self.max_buffer_bytes // 2 * 2,
+            )
             if len(self.preroll) > limit:
                 del self.preroll[: len(self.preroll) - limit]
         if self.has_speech and self.silence_ms >= self.settings.silence_end_ms:

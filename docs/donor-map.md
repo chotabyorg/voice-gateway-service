@@ -30,6 +30,34 @@ renamed copy of the donor.
 | `voice_agent/requirements.txt`, donor Docker/runtime/CI | New service manifests and workflows | Rewrite | Use a Main-Chota-shaped Python 3.11 service, exact direct dependency pins, inert defaults, non-root container, CI, and no donor `.env`, state, telephony, or product runtime. |
 | Donor LLM, RAG/knowledge, Bitrix/CRM, ToolAgent, scenarios, tenants, handoff, campaigns/outbound, analytics, call archive, database/jobs, admin API/console, AMI/Twilio/Verto product wiring, PJSUA2 workspace | None | Drop | These are standalone product, AI, business, persistence, or provider-control ownership. They do not belong in Main Voice Gateway. |
 
+## MTS media follow-up (2026-10-13)
+
+Additional donor inspected: `chotabyorg/mts`, `main` commit
+`8fd51c236bf43060a788778139a3fbbc4d223be9`.
+
+| Donor source | Target | Decision |
+|---|---|---|
+| `backend/mts/voice/media/vad.py` | `media/vad.py` | Adapt release-threshold hysteresis; require minimum voiced duration before lowering the threshold. |
+| `backend/mts/voice/media/playback.py` | `media/playback.py` | Adapt gain ramps, pause/resume/duck and stop mechanics; preserve bounded pacing and prevent resume after stop. |
+| `backend/mts/providers.py` OpenAI-compatible audio adapters and reusable HTTP-client mechanics | `media/providers/openrouter.py` | Rewrite as explicit OpenRouter audio-only adapters with fixed endpoint, documented JSON STT format, bounded streamed MP3 decoding, injected settings and no SDK/runtime routing dependency. |
+| Later local MTS snapshots of `providers.py`, `voice/media/playback.py` and `runtime.py` | `media/providers/decoder.py`, `media/playback.py`, `media/call.py` | Adapt incremental audio playback and first-audio/response-gap measurement; isolate counters, revoke late output and bound cancellation. These snapshots are reference material, not claimed to be the donor main revision. |
+| SpeechKit/Yandex, ElevenLabs and Silero provider implementations | None | Additional provider activation/adapters are outside this OpenRouter provider transfer. |
+| Direct SIP/PJSUA2 session wiring, workspace/Room state, transfer policy, LLM, prompts, CRM, recordings and deployment configuration | None | Do not transplant donor product/runtime ownership into this service. |
+
+The local snapshot identities (SHA-256) are recorded for provenance:
+
+- `tmp/remote_mts/mts/voice/media/runtime.py`:
+  `59161e8e20bfa628da17c7ea6966a052efd00f240aa533819a44cef6417b96c3`
+- `tmp/remote_mts/mts/voice/media/playback.py`:
+  `1f5f96c8061bc1995a3349bf743c6422a8f1d8196876cffb1a7ba12eb3839d56`
+- `tmp/silero_remote/providers.py`:
+  `b5dbd751143e669b7d17ef5022b39d2fd3a64787b81bc9847ce93ff891045f20`
+
+Those paths identify the inspected donor workspace, not files shipped in this
+repository. New tests reproduce AudioSocket identity/closed-write failures,
+immediate caller replies, cancellation-resistant TTS, streaming failures and
+decoder cleanup. See [adapter behavior and validation](provider-adapters.md).
+
 ## Main Chota boundary
 
 The accepted Main Chota Conversation ADR assigns PBX/audio, STT/TTS, VAD,

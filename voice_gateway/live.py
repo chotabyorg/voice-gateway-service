@@ -41,18 +41,20 @@ class LiveSettings(BaseSettings):
     voice_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     conversation_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     allowed_numbers: str
-    stt_provider: Literal["groq", "openrouter"]
+    stt_provider: Literal["groq", "openrouter", "speechkit"]
     stt_api_key: SecretStr
     stt_model: str = Field(min_length=1, max_length=200)
     stt_language: Literal["", "ru", "en", "be"] = "ru"
     stt_early_start_ms: int = Field(default=0, ge=0, lt=500)
     vad: Literal["energy", "webrtc", "ten"] = "energy"
-    tts_provider: Literal["edge", "openrouter"]
+    tts_provider: Literal["edge", "openrouter", "speechkit"]
     tts_api_key: SecretStr = SecretStr("")
     tts_model: str = Field(default="", max_length=200)
     tts_voice: str = Field(min_length=1, max_length=200)
+    tts_role: str = Field(default="support", max_length=32)
     tts_format: Literal["mp3", "pcm"] = "mp3"
     tts_expand_byn: bool = False
+    tts_native_pcm_resampler: bool = False
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -72,10 +74,27 @@ class LiveSettings(BaseSettings):
         private_url(self.conversation_url)
         if not self.stt_api_key.get_secret_value():
             raise ValueError("STT credential is required")
+        if self.stt_provider == "speechkit" and (
+            self.stt_model != "general"
+            or self.stt_language not in {"ru", "en"}
+            or self.stt_early_start_ms
+        ):
+            raise ValueError("SpeechKit requires general, ru/en and no batch speculation")
         if self.tts_provider == "openrouter" and (
             not self.tts_api_key.get_secret_value() or not self.tts_model
         ):
             raise ValueError("OpenRouter TTS model and credential are required")
+        if self.tts_provider == "speechkit":
+            from voice_gateway.media.providers.speechkit import SpeechKitTTSSettings
+
+            SpeechKitTTSSettings(
+                self.tts_api_key.get_secret_value(),
+                model=self.tts_model,
+                voice=self.tts_voice,
+                role=self.tts_role,
+            )
+            if self.tts_format != "pcm" or self.tts_native_pcm_resampler:
+                raise ValueError("SpeechKit TTS returns telephone PCM directly")
         return self
 
 
@@ -119,11 +138,13 @@ def build_live_runtime(settings, config=None):
         for host in (settings.http_host, settings.audiosocket_host)
     ):
         raise ValueError("Live PBX ingress must bind to loopback")
-    if shutil.which("ffmpeg") is None:
+    if config.tts_provider != "speechkit" and shutil.which("ffmpeg") is None:
         raise ValueError("Real TTS requires ffmpeg")
     for module in (
-        "groq" if config.stt_provider == "groq" else "httpx",
-        "edge_tts" if config.tts_provider == "edge" else "httpx",
+        {"groq": "groq", "speechkit": "yandexcloud", "openrouter": "httpx"}[config.stt_provider],
+        {"edge": "edge_tts", "openrouter": "httpx", "speechkit": "yandexcloud"}[
+            config.tts_provider
+        ],
     ):
         if importlib.util.find_spec(module) is None:
             raise ValueError("Selected speech provider dependency is unavailable")
@@ -148,7 +169,22 @@ def build_live_runtime(settings, config=None):
 
     queue = BatchSTTSettings(max_pending=4, early_start_ms=config.stt_early_start_ms)
     vad = VADSettings(max_utterance_ms=30000, min_speech_ms=120 if classifier_factory else 80)
-    if config.stt_provider == "groq":
+    if config.stt_provider == "speechkit":
+        from voice_gateway.media.providers.speechkit import SpeechKitSettings, SpeechKitSTT
+
+        stt_config = SpeechKitSettings(
+            api_key=config.stt_api_key.get_secret_value(),
+            model=config.stt_model,
+            language={"ru": "ru-RU", "en": "en-US"}[config.stt_language],
+        )
+
+        def stt_factory():
+            return SpeechKitSTT(
+                stt_config,
+                vad=vad,
+                speech_classifier=classifier_factory() if classifier_factory else None,
+            )
+    elif config.stt_provider == "groq":
         stt_config = GroqSTTSettings(
             api_key=config.stt_api_key.get_secret_value(),
             model=config.stt_model,
@@ -182,6 +218,19 @@ def build_live_runtime(settings, config=None):
 
         def tts_factory():
             return EdgeTTS(tts_config)
+    elif config.tts_provider == "speechkit":
+        from voice_gateway.media.providers.speechkit import SpeechKitTTS, SpeechKitTTSSettings
+
+        tts_config = SpeechKitTTSSettings(
+            api_key=config.tts_api_key.get_secret_value(),
+            model=config.tts_model,
+            voice=config.tts_voice,
+            role=config.tts_role,
+            expand_byn=config.tts_expand_byn,
+        )
+
+        def tts_factory():
+            return SpeechKitTTS(tts_config)
     else:
         tts_config = OpenRouterTTSSettings(
             api_key=config.tts_api_key.get_secret_value(),
@@ -189,6 +238,7 @@ def build_live_runtime(settings, config=None):
             voice=config.tts_voice,
             response_format=config.tts_format,
             expand_byn=config.tts_expand_byn,
+            native_pcm_resampler=config.tts_native_pcm_resampler,
         )
 
         def tts_factory():

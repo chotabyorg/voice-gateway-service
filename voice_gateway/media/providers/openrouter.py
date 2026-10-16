@@ -16,6 +16,7 @@ from ..completion import deadline_timeout
 from ..interfaces import BaseTTS
 from ..speech_text import pronounce_byn
 from .decoder import decode_audio_stream
+from .pcm_resampler import resample_pcm_stream
 
 BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -51,6 +52,7 @@ class OpenRouterTTSSettings(OpenRouterSettings):
     max_mp3_bytes: int = 3_000_000
     max_pcm_bytes: int = 1_920_000
     stream_timeout: float = 120
+    native_pcm_resampler: bool = False
 
     def __post_init__(self):
         super().__post_init__()
@@ -164,8 +166,13 @@ class OpenRouterSTT(BatchSTT):
 
 
 class OpenRouterTTS(BaseTTS):
-    def __init__(self, settings, *, client_factory=None, decoder=decode_audio_stream):
-        self.settings, self.decoder = settings, decoder
+    def __init__(self, settings, *, client_factory=None, decoder=None):
+        self.settings = settings
+        self.decoder = decoder or (
+            resample_pcm_stream
+            if settings.native_pcm_resampler and settings.response_format == "pcm"
+            else decode_audio_stream
+        )
         self.http = _AudioClient(settings, client_factory)
 
     async def synthesize(self, text):

@@ -241,3 +241,34 @@ async def test_live_early_stt_is_explicit_and_keeps_confirmed_endpoint(monkeypat
         await runtime.stop()
     with pytest.raises(ValidationError):
         config(stt_early_start_ms=500)
+
+
+async def test_speechkit_explicit_activation_uses_telephone_pcm_without_ffmpeg(monkeypatch):
+    from voice_gateway.media.providers.speechkit import SpeechKitSTT, SpeechKitTTS
+
+    monkeypatch.setattr("voice_gateway.live.shutil.which", lambda name: None)
+    settings = dict(
+        stt_provider="speechkit",
+        stt_model="general",
+        tts_provider="speechkit",
+        tts_model="livetts",
+        tts_voice="sofia",
+        tts_format="pcm",
+    )
+    runtime = build_live_runtime(Settings(mode="live_audiosocket"), config(**settings))
+    try:
+        assert isinstance(runtime.stt_factory(), SpeechKitSTT)
+        assert isinstance(runtime.tts_factory(), SpeechKitTTS)
+        assert runtime.stt_factory().vad.settings.silence_end_ms == 500
+    finally:
+        await runtime.stop()
+    for changes in [
+        {"stt_early_start_ms": 200},
+        {"stt_language": "be"},
+        {"tts_model": "general"},
+        {"tts_format": "mp3"},
+        {"tts_native_pcm_resampler": True},
+        {"tts_api_key": ""},
+    ]:
+        with pytest.raises(ValidationError):
+            config(**{**settings, **changes})

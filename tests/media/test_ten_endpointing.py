@@ -9,7 +9,7 @@ from tests.media.test_stt_packetization import CapturingSTT
 from voice_gateway.live import build_live_runtime
 from voice_gateway.media.call import CallState, MediaCall
 from voice_gateway.media.interruption import InterruptionDetector
-from voice_gateway.media.vad import VADSettings
+from voice_gateway.media.vad import EnergyVAD, VADSettings
 from voice_gateway.settings import Settings
 from voice_gateway.speech_activity import TenSpeech
 
@@ -88,14 +88,16 @@ def test_ten_barge_in_feeds_quiet_frames_but_keeps_duration_guard():
     assert event is not None and b"".join(event.chunks).endswith(pcm(1000, 100))
 
 
-def test_native_ten_silence_and_stationary_noise_do_not_trigger_speech():
+def test_native_ten_silence_and_stationary_noise_do_not_open_an_utterance():
     classifier = TenSpeech()
+    vad = EnergyVAD(VADSettings(min_speech_ms=120), classifier=classifier)
     rng = np.random.default_rng(23)
-    flags = [classifier(bytes(320)) for _ in range(50)]
-    flags += [
-        classifier(rng.integers(-500, 501, 160, dtype=np.int16).tobytes()) for _ in range(150)
-    ]
-    assert not any(flags)
+    frames = [bytes(320)] * 50
+    frames += [rng.integers(-500, 501, 160, dtype=np.int16).tobytes() for _ in range(150)]
+    # TEN may emit one startup-positive frame. The real 120 ms speech guard
+    # must reject it without scheduling STT or leaving an acoustic buffer open.
+    assert not any(vad.feed(frame) for frame in frames)
+    assert not vad.has_speech and vad.buffer_bytes == 0
 
 
 async def test_live_ten_opt_in_and_independent_native_state(monkeypatch):

@@ -17,6 +17,7 @@ class BatchSTTSettings:
     shutdown_timeout: float = 5
     max_utterance_bytes: int = 1000000
     max_final_chars: int = 8000
+    early_start_ms: int = 0
 
     def __post_init__(self):
         if (
@@ -25,6 +26,7 @@ class BatchSTTSettings:
             or self.shutdown_timeout <= 0
             or self.max_utterance_bytes < 2
             or self.max_final_chars < 1
+            or self.early_start_ms < 0
         ):
             raise ValueError("Invalid batch STT settings")
 
@@ -40,6 +42,8 @@ class BatchSTT(BaseSTT):
     def __init__(
         self, *, vad=VADSettings(), queue=BatchSTTSettings(), emit=None, speech_classifier=None
     ):
+        if queue.early_start_ms >= vad.silence_end_ms:
+            raise ValueError("Early STT must precede the confirmed speech endpoint")
         self.vad = EnergyVAD(
             vad, max_buffer_bytes=queue.max_utterance_bytes, classifier=speech_classifier
         )
@@ -54,6 +58,8 @@ class BatchSTT(BaseSTT):
         self._accepting = True  # Also supports offline feed/flush with fake transcribe.
         self._deliver_results = True
         self._pending_frame = b""
+        self._early_task = self._early_confirmation = None
+        self._early_attempted = False
 
     @property
     def last_speech_at(self):
@@ -75,6 +81,7 @@ class BatchSTT(BaseSTT):
         self._accepting = True
         self._deliver_results = True
         self._pending_frame = b""
+        self._early_attempted = False
         self.vad.reset()
         self._speech_ended_at = self.final_speech_at = None
         await self._open()
@@ -102,15 +109,45 @@ class BatchSTT(BaseSTT):
             raise
         if self.vad.has_speech and self.vad.silence_ms == 0:
             self._speech_ended_at = ended_at
+            self._discard_early()
         if ready:
             await self._flush_utterance()
+        elif (
+            self._accepting
+            and self.queue.early_start_ms
+            and not self._early_attempted
+            and self.vad.speech_ms >= self.vad.settings.min_speech_ms
+            and self.vad.silence_ms >= self.queue.early_start_ms
+            and len(self._active_tasks) < self.queue.max_pending
+            and not self._request_slots.locked()
+        ):
+            # Copy, never consume: resumed speech still needs the entire utterance.
+            self._early_attempted = True
+            self._early_started_at = time.monotonic()
+            self._early_confirmation = asyncio.get_running_loop().create_future()
+            self._early_task = self._start_transcription(
+                b"".join(self.vad.buffer), confirmation=self._early_confirmation
+            )
+            self.emit("stt_early_started", silence_ms=round(self.vad.silence_ms))
+
+    def _discard_early(self):
+        if self._early_task is None:
+            return
+        # The decision also fences a provider that suppresses cancellation.
+        self._early_confirmation.set_result(False)
+        if not self._early_task.done() and not self._early_task.cancelling():
+            self._early_task.cancel("Unconfirmed acoustic endpoint discarded")
+        self._early_task = self._early_confirmation = None
+        self.emit("stt_early_discarded")
 
     def _reset_buffer(self):
+        self._discard_early()
+        self._early_attempted = False
         self.vad.reset()
         self._pending_frame = b""
 
     async def _flush_utterance(self):
-        if len(self._active_tasks) >= self.queue.max_pending:
+        if self._early_task is None and len(self._active_tasks) >= self.queue.max_pending:
             self.emit("stt_backlog_rejected", pending_tasks=len(self._active_tasks))
             raise RuntimeError("Live transcription backlog exceeded; audio remains buffered")
         endpoint = {
@@ -126,24 +163,44 @@ class BatchSTT(BaseSTT):
             ),
         }
         pcm = self.vad.take()
+        self._early_attempted = False
         if not pcm:
+            self._discard_early()
             return
         if len(pcm) > self.queue.max_utterance_bytes:
             self.emit("stt_utterance_rejected", audio_bytes=len(pcm))
+            self._discard_early()
             return
         self.emit("stt_endpoint", **endpoint)
+        if self._early_task is not None:
+            task = self._early_task
+            self._early_confirmation.set_result(True)
+            self._early_task = self._early_confirmation = None
+            self.emit(
+                "stt_early_confirmed",
+                duration_ms=round((time.monotonic() - self._early_started_at) * 1000),
+            )
+        else:
+            task = self._start_transcription(pcm)
+        self._last_transcription_task = task
+
+    def _start_transcription(self, pcm, *, confirmation=None):
         task = asyncio.create_task(
             self._transcribe_and_callback(
-                pcm, self._last_transcription_task, self._speech_ended_at, time.monotonic()
+                pcm,
+                self._last_transcription_task,
+                self._speech_ended_at,
+                time.monotonic(),
+                confirmation=confirmation,
             )
         )
-        self._last_transcription_task = task
         self._active_tasks.add(task)
         self.emit("stt_queue_depth", pending_tasks=len(self._active_tasks))
         task.add_done_callback(self._active_tasks.discard)
+        return task
 
     async def _transcribe_and_callback(
-        self, pcm, previous=None, speech_ended_at=None, queued_at=None
+        self, pcm, previous=None, speech_ended_at=None, queued_at=None, *, confirmation=None
     ):
         text = ""
         queued_at = time.monotonic() if queued_at is None else queued_at
@@ -163,6 +220,8 @@ class BatchSTT(BaseSTT):
                     self.emit("stt_empty_result", audio_ms=len(pcm) * 1000 // 16000)
         except Exception as exc:
             self.emit("stt_transcribe_error", error_type=type(exc).__name__)
+        if confirmation is not None and not await asyncio.shield(confirmation):
+            return
         if previous is not None:
             try:
                 await asyncio.shield(previous)
@@ -228,7 +287,9 @@ class BatchSTT(BaseSTT):
             if (
                 drain
                 and self.vad.speech_ms >= self.vad.settings.min_speech_ms
-                and len(self._active_tasks) < self.queue.max_pending
+                and (
+                    self._early_task is not None or len(self._active_tasks) < self.queue.max_pending
+                )
             ):
                 await self._flush_utterance()
             tasks = tuple(self._active_tasks)

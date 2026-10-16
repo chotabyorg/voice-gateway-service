@@ -32,6 +32,25 @@ service environment, never source or browser settings. Selected provider
 dependencies and ffmpeg are required before the listener starts. Each call owns
 its speech clients; runtime shutdown drains calls then closes boundary clients.
 
+Optional `VOICE_LIVE_STT_EARLY_START_MS=200` overlaps batch recognition with
+the existing 500 ms acoustic endpoint wait. It defaults to `0` (disabled).
+After enough classified speech and 200 ms silence, one bounded request uses a
+snapshot of the buffered audio. No transcript is delivered until the normal
+endpoint is confirmed. If speech resumes, the early request is cancelled and
+its result fenced; final recognition uses the complete original utterance.
+Only one early attempt is allowed per utterance, so resumed speech can incur
+at most one additional provider request. Provider concurrency and backlog
+limits still apply, and early work is skipped when capacity is unavailable.
+Empty/error responses are not automatically retried. Call hangup cancels early
+work and fences even cancellation-resistant providers; explicit offline drain
+can confirm the buffered utterance. This does not change Conversation scheduling,
+text settling, final admission, or AI/playback authorization.
+
+`stt_early_started`, `stt_early_discarded` and `stt_early_confirmed` contain
+metadata only. The confirmed event's `duration_ms` measures overlapped waiting,
+not guaranteed end-to-end savings. With a 200 ms start and 500 ms endpoint,
+up to 300 ms of provider work can overlap; network/model/TTS latency remains.
+
 Optional `VOICE_LIVE_VAD=webrtc` selects a local WebRTC speech classifier instead
 of the default energy threshold. It operates on 20 ms, 8 kHz PCM frames and
 requires the pinned optional `webrtcvad-wheels` dependency. STT segmentation and

@@ -3,7 +3,12 @@
 import pytest
 
 from tests.media.media_fakes import FakeTTS, pcm
-from voice_gateway.media.providers.greeting import GreetingStripTTS, strip_leading_greeting
+from voice_gateway.media.providers.greeting import (
+    GreetingStripTTS,
+    strip_leading_greeting,
+    strip_stock_formulas,
+    strip_trailing_offer,
+)
 
 
 @pytest.mark.parametrize(
@@ -28,6 +33,45 @@ def test_strip_removes_one_greeting_formula_or_keeps_text(text, expected):
 def test_strip_rejects_non_text():
     with pytest.raises(ValueError):
         strip_leading_greeting(None)
+    with pytest.raises(ValueError):
+        strip_trailing_offer(None)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Запись на завтра в десять. Чем я могу вам помочь?", "Запись на завтра в десять."),
+        ("Хорошо, записала. Могу ли я ещё чем-то помочь?", "Хорошо, записала."),
+        ("Салон работает с девяти. Что вас интересует?", "Салон работает с девяти."),
+        ("Поняла. Есть ли ещё вопросы?", "Поняла."),
+        ("До связи. Обращайтесь!", "До связи."),
+        ("Чем могу помочь?", "Чем могу помочь?"),
+        ("Чем я могу вам помочь?", "Чем я могу вам помочь?"),
+        ("Помочь с выбором скорости?", "Помочь с выбором скорости?"),
+        (
+            "Запись подтверждена, остальное уточню завтра.",
+            "Запись подтверждена, остальное уточню завтра.",
+        ),
+    ],
+)
+def test_trailing_offer_removed_only_as_last_sentence(text, expected):
+    assert strip_trailing_offer(text) == expected
+
+
+async def test_wrapper_applies_both_formulas_before_provider():
+    inner = FakeTTS()
+    tts = GreetingStripTTS(inner)
+    await tts.synthesize("Здравствуйте! Запись на завтра. Чем могу помочь?")
+    assert inner.texts == ["Запись на завтра."]
+
+
+def test_stock_formulas_compose_in_one_pass():
+    assert (
+        strip_stock_formulas("Здравствуйте! Запись на завтра. Чем могу помочь?")
+        == "Запись на завтра."
+    )
+    assert strip_stock_formulas("Слушаю вас.") == "Слушаю вас."
+    assert strip_stock_formulas("Чем могу помочь?") == "Чем могу помочь?"
 
 
 async def test_wrapper_speaks_stripped_text_to_provider():

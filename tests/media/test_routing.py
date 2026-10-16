@@ -224,3 +224,20 @@ async def test_live_uses_real_audio_adapters_and_closes_clients(monkeypatch):
     await runtime.stop()
     assert runtime.conversation_port.client.is_closed
     assert runtime.registry.routes.client.is_closed
+
+
+@pytest.mark.parametrize("early_start", [0, 200])
+async def test_live_early_stt_is_explicit_and_keeps_confirmed_endpoint(monkeypatch, early_start):
+    monkeypatch.setattr("voice_gateway.live.shutil.which", lambda name: "test-ffmpeg")
+    runtime = build_live_runtime(
+        Settings(mode="live_audiosocket"), config(stt_early_start_ms=early_start)
+    )
+    try:
+        stt = runtime.stt_factory()
+        assert stt.queue.early_start_ms == early_start
+        assert stt.vad.settings.silence_end_ms == 500
+        assert stt.queue.max_pending == 4
+    finally:
+        await runtime.stop()
+    with pytest.raises(ValidationError):
+        config(stt_early_start_ms=500)

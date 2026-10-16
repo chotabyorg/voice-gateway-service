@@ -45,6 +45,7 @@ class LiveSettings(BaseSettings):
     stt_api_key: SecretStr
     stt_model: str = Field(min_length=1, max_length=200)
     stt_language: Literal["", "ru", "en", "be"] = "ru"
+    stt_early_start_ms: int = Field(default=0, ge=0, lt=500)
     vad: Literal["energy", "webrtc", "ten"] = "energy"
     tts_provider: Literal["edge", "openrouter"]
     tts_api_key: SecretStr = SecretStr("")
@@ -145,7 +146,7 @@ def build_live_runtime(settings, config=None):
         TenSpeech()(bytes(320))
         classifier_factory = TenSpeech
 
-    queue = BatchSTTSettings(max_pending=4)
+    queue = BatchSTTSettings(max_pending=4, early_start_ms=config.stt_early_start_ms)
     vad = VADSettings(max_utterance_ms=30000, min_speech_ms=120 if classifier_factory else 80)
     if config.stt_provider == "groq":
         stt_config = GroqSTTSettings(

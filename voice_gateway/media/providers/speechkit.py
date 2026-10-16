@@ -240,7 +240,7 @@ class SpeechKitSTT(BaseSTT):
                 raise
 
         sender = asyncio.create_task(send())
-        finals, total = [], 0
+        finals, refined, total = [], {}, 0
         try:
             async for response in rpc:
                 event = response.WhichOneof("Event")
@@ -250,8 +250,19 @@ class SpeechKitSTT(BaseSTT):
                     total += len(text) + 1
                     if total > self.settings.max_final_chars or len(finals) >= 64:
                         raise ValueError("SpeechKit transcript exceeds limit")
+                    # Keep every segment so server final_index values stay aligned.
+                    finals.append(text)
+                elif event == "final_refinement":
+                    # Normalized replacement for a previously sent final segment.
+                    refinement = response.final_refinement
+                    index = refinement.final_index
+                    alternatives = refinement.normalized_text.alternatives
+                    text = alternatives[0].text.strip() if alternatives else ""
+                    total += len(text) + 1
+                    if total > self.settings.max_final_chars or not 0 <= index < 64:
+                        raise ValueError("SpeechKit refinement exceeds limit")
                     if text:
-                        finals.append(text)
+                        refined[index] = text
                 elif event == "partial":
                     # Hypotheses may change. Never hand them to Conversation or log them.
                     if any(
@@ -259,12 +270,26 @@ class SpeechKitSTT(BaseSTT):
                         for a in response.partial.alternatives
                     ):
                         raise ValueError("SpeechKit partial exceeds limit")
-                elif event not in {"eou_update", "status_code"}:
+                elif event is None or event in {
+                    "eou_update",
+                    "status_code",
+                    "session_uuid",
+                    "audio_cursors",
+                    "classifier_update",
+                    "speaker_analysis",
+                    "conversation_analysis",
+                    "summarization",
+                    "channel_tag",
+                }:
+                    # Informational server messages carry no transcript; ignore them.
+                    continue
+                else:
                     raise ValueError("Unexpected SpeechKit response")
             if not utterance.confirmed:
                 raise RuntimeError("SpeechKit closed before local speech endpoint")
             await sender
-            return " ".join(finals)
+            segments = [refined.get(index, text) for index, text in enumerate(finals)]
+            return " ".join(segment for segment in segments if segment)
         except asyncio.CancelledError:
             if not asyncio.current_task().cancelling():
                 raise RuntimeError("SpeechKit stream cancelled by provider") from None

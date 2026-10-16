@@ -22,6 +22,9 @@ class Recognizer(service.RecognizerServicer):
         self.delay_first = 0
         self.fail = False
         self.hang = False
+        self.refinement = None
+        self.refinement_index = 0
+        self.informational = False
 
     async def RecognizeStreaming(self, requests, context):
         index = len(self.requests)
@@ -51,6 +54,23 @@ class Recognizer(service.RecognizerServicer):
                             alternatives=[p.Alternative(text=f"fixture {index}")]
                         )
                     )
+                    if self.informational:
+                        # Server housekeeping carries no transcript and must not
+                        # fail the utterance: session id first, then a message
+                        # with no event set at all.
+                        yield p.StreamingResponse(
+                            session_uuid=p.SessionUuid(uuid="fixture-session")
+                        )
+                        yield p.StreamingResponse()
+                    if self.refinement is not None:
+                        yield p.StreamingResponse(
+                            final_refinement=p.FinalRefinement(
+                                final_index=self.refinement_index,
+                                normalized_text=p.AlternativeUpdate(
+                                    alternatives=[p.Alternative(text=self.refinement)]
+                                ),
+                            )
+                        )
         finally:
             self.active -= 1
             self.closed.set()
@@ -199,6 +219,51 @@ async def test_provider_failure_has_no_retry_or_late_final_or_secret_logging(
             await stt.feed_audio(pcm(0, 20))
         assert not finals and len(fake.requests) == 1
         assert "fixture-secret" not in caplog.text and "secret provider details" not in caplog.text
+    finally:
+        await stt.abort_stream()
+    assert not stt._tasks and not stt._rpcs
+
+
+async def test_final_refinement_replaces_raw_segment_and_ignores_housekeeping(
+    provider,
+):
+    fake, connect = provider
+    fake.informational = True
+    fake.refinement = "Fixture 0!"
+    finals = []
+
+    async def final(text):
+        finals.append(text)
+
+    stt = SpeechKitSTT(SpeechKitSettings("fixture-secret"), connection_factory=connect)
+    await stt.start_stream(on_final=final)
+    try:
+        await utterance(stt)
+        await wait_until(lambda: finals)
+        assert finals == ["Fixture 0!"]
+    finally:
+        await stt.abort_stream()
+    assert not stt._tasks and not stt._rpcs
+
+
+async def test_refinement_out_of_range_fails_explicitly_without_final(provider):
+    fake, connect = provider
+    fake.refinement = "unbounded"
+    fake.refinement_index = 99
+    finals = []
+
+    async def final(text):
+        finals.append(text)
+
+    stt = SpeechKitSTT(SpeechKitSettings("fixture-secret"), connection_factory=connect)
+    await stt.start_stream(on_final=final)
+    try:
+        try:
+            await utterance(stt)
+        except RuntimeError:
+            pass
+        await wait_until(lambda: stt._error)
+        assert not finals
     finally:
         await stt.abort_stream()
     assert not stt._tasks and not stt._rpcs

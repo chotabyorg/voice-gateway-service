@@ -55,6 +55,7 @@ class LiveSettings(BaseSettings):
     tts_format: Literal["mp3", "pcm"] = "mp3"
     tts_expand_byn: bool = False
     tts_native_pcm_resampler: bool = False
+    tts_cache_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -213,11 +214,27 @@ def build_live_runtime(settings, config=None):
                 speech_classifier=classifier_factory() if classifier_factory else None,
             )
 
+    from voice_gateway.media.providers.cached import CachingTTS, TTSCache
+
+    # One bounded cache shared by all calls; the key includes the full voice
+    # descriptor, so a voice/model change can never serve stale audio.
+    tts_cache = TTSCache()
+    # One bounded cache shared by all calls when explicitly enabled; the key
+    # includes the full voice descriptor, so a voice/model change can never
+    # serve stale audio. Disabled by default: factories return bare adapters.
+    tts_cache = TTSCache() if config.tts_cache_enabled else None
+
+    def _cached(inner, voice_key):
+        if tts_cache is None:
+            return inner
+        return CachingTTS(inner, cache=tts_cache, voice_key=voice_key)
+
     if config.tts_provider == "edge":
         tts_config = EdgeTTSSettings(voice=config.tts_voice)
+        tts_voice_key = f"edge:{config.tts_voice}"
 
         def tts_factory():
-            return EdgeTTS(tts_config)
+            return _cached(EdgeTTS(tts_config), tts_voice_key)
     elif config.tts_provider == "speechkit":
         from voice_gateway.media.providers.speechkit import SpeechKitTTS, SpeechKitTTSSettings
 
@@ -228,9 +245,10 @@ def build_live_runtime(settings, config=None):
             role=config.tts_role,
             expand_byn=config.tts_expand_byn,
         )
+        tts_voice_key = f"speechkit:{config.tts_model}:{config.tts_voice}:{config.tts_role}"
 
         def tts_factory():
-            return SpeechKitTTS(tts_config)
+            return _cached(SpeechKitTTS(tts_config), tts_voice_key)
     else:
         tts_config = OpenRouterTTSSettings(
             api_key=config.tts_api_key.get_secret_value(),
@@ -240,9 +258,13 @@ def build_live_runtime(settings, config=None):
             expand_byn=config.tts_expand_byn,
             native_pcm_resampler=config.tts_native_pcm_resampler,
         )
+        tts_voice_key = (
+            f"openrouter:{config.tts_model}:{config.tts_voice}:{config.tts_format}"
+            f":{config.tts_expand_byn}:{config.tts_native_pcm_resampler}"
+        )
 
         def tts_factory():
-            return OpenRouterTTS(tts_config)
+            return _cached(OpenRouterTTS(tts_config), tts_voice_key)
 
     routes = ControlPlaneRoutes(
         config.control_plane_url,

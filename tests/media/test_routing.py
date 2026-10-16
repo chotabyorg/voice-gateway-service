@@ -272,3 +272,29 @@ async def test_speechkit_explicit_activation_uses_telephone_pcm_without_ffmpeg(m
     ]:
         with pytest.raises(ValidationError):
             config(**{**settings, **changes})
+
+
+async def test_tts_cache_is_opt_in_and_shares_one_store(monkeypatch):
+    from voice_gateway.media.providers.cached import CachingTTS
+    from voice_gateway.media.providers.speechkit import SpeechKitTTS
+
+    monkeypatch.setattr("voice_gateway.live.shutil.which", lambda name: None)
+    settings = dict(
+        stt_provider="speechkit",
+        stt_model="general",
+        tts_provider="speechkit",
+        tts_model="livetts",
+        tts_voice="sofia",
+        tts_format="pcm",
+        tts_cache_enabled=True,
+    )
+    runtime = build_live_runtime(Settings(mode="live_audiosocket"), config(**settings))
+    try:
+        first = runtime.tts_factory()
+        second = runtime.tts_factory()
+        assert isinstance(first, CachingTTS)
+        assert isinstance(first._inner, SpeechKitTTS)
+        assert first._cache is second._cache
+        assert first._voice_key == second._voice_key != ""
+    finally:
+        await runtime.stop()

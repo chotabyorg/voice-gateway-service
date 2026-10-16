@@ -159,6 +159,8 @@ class MediaCall:
         try:
             async with asyncio.timeout(self.settings.max_call_seconds):
                 await self.transport.prepare()
+                if hasattr(self.tts, "prewarm"):
+                    self.tts.prewarm()
                 await self.stt.start_stream(on_final=self._final)
                 await self.conversation_port.call_started(
                     CallStarted(

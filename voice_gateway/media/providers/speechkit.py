@@ -425,6 +425,17 @@ class SpeechKitTTS(BaseTTS):
         self._channel = self._stub = None
         self._rpcs = set()
         self._closed = False
+        self._warming = None
+
+    def prewarm(self):
+        # Open TLS/HTTP2 before the first answer; a failure only loses the head start.
+        if self._closed or self._channel is not None:
+            return
+        self._channel, self._stub = self.connection_factory()
+        ready = getattr(self._channel, "channel_ready", None)
+        if ready is not None:
+            self._warming = asyncio.create_task(asyncio.wait_for(ready(), 5))
+            self._warming.add_done_callback(observe_task)
 
     async def synthesize(self, text):
         chunks = bytearray()
@@ -528,6 +539,9 @@ class SpeechKitTTS(BaseTTS):
 
     async def close(self):
         self._closed = True
+        if self._warming is not None:
+            self._warming.cancel()
+            await asyncio.gather(self._warming, return_exceptions=True)
         for rpc in tuple(self._rpcs):
             rpc.cancel()
         channel, self._channel = self._channel, None

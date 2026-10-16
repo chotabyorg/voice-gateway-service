@@ -125,3 +125,12 @@ queued and in-flight requests and fences late results. Provider cancellation and
 close share a deadline of at most 0.5 seconds. This avoids retaining the single
 call slot for the normal five-second STT drain while a caller redials. Explicit
 offline `stop_stream()` still drains results; admission limits remain unchanged.
+### Russian BYN pronunciation
+
+For an explicitly selected OpenRouter TTS route, `VOICE_LIVE_TTS_EXPAND_BYN=true`
+expands BYN amounts only in the text sent to speech synthesis: `50 BYN` becomes
+`50 белорусских рублей`, and `49,90 BYN` becomes
+`49 белорусских рублей 90 копеек`. Integer amounts use Russian ruble endings.
+Canonical replies, CRM values, other currencies and playback authority are
+unchanged. The option is disabled by default; both input and expanded text must
+fit the existing text bound.

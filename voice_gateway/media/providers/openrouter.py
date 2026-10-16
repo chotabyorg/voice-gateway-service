@@ -14,6 +14,7 @@ from ..audio import pcm_to_wav, validate_pcm
 from ..batch_stt import BatchSTT
 from ..completion import deadline_timeout
 from ..interfaces import BaseTTS
+from ..speech_text import pronounce_byn
 from .decoder import decode_audio_stream
 
 BASE_URL = "https://openrouter.ai/api/v1"
@@ -45,6 +46,7 @@ class OpenRouterSTTSettings(OpenRouterSettings):
 class OpenRouterTTSSettings(OpenRouterSettings):
     voice: str = ""
     response_format: str = "mp3"
+    expand_byn: bool = False
     max_text_chars: int = 2000
     max_mp3_bytes: int = 3_000_000
     max_pcm_bytes: int = 1_920_000
@@ -176,6 +178,10 @@ class OpenRouterTTS(BaseTTS):
             return
         if len(text) > self.settings.max_text_chars:
             raise ValueError("TTS text exceeds configured limit")
+        if self.settings.expand_byn:
+            text = pronounce_byn(text)
+            if len(text) > self.settings.max_text_chars:
+                raise ValueError("TTS spoken text exceeds configured limit")
         body = {
             "model": self.settings.model,
             "input": text,

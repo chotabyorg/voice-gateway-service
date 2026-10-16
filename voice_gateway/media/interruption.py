@@ -71,6 +71,9 @@ class InterruptionDetector:
         energy, milliseconds = rms(chunk), duration_ms(chunk)
         policy = self.settings
         threshold = policy.min_rms
+        # Stateful neural classifiers must also observe quiet/background
+        # frames; skipping them leaves stale speech state between phrases.
+        classified = self.classifier(chunk) if self.classifier is not None else True
         if policy.guarded:
             if elapsed < policy.calibration_seconds:
                 self.echo_rms = max(self.echo_rms, energy)
@@ -88,7 +91,7 @@ class InterruptionDetector:
             limit = (policy.required_ms + policy.preroll_ms) * PCM.bytes_per_second // 1000
             while len(self.chunks) > 1 and sum(map(len, self.chunks[1:])) >= limit:
                 self.chunks.pop(0)
-        speech = energy >= threshold and (self.classifier is None or self.classifier(chunk))
+        speech = energy >= threshold and classified
         self.candidate_ms = self.candidate_ms + milliseconds if speech else 0
         if self.candidate_ms < policy.required_ms:
             return None

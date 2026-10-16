@@ -33,6 +33,28 @@ Preroll and the complete buffered utterance are preserved; classification does
 not remove samples from recognized speech. This is acoustic endpointing, not
 Conversation text settling or AgentTurn scheduling.
 
+`VOICE_LIVE_VAD=ten` explicitly selects TEN VAD, pinned to upstream commit
+`d68ab71c8d5fbd8f98e97ae7c9986af76b5d72b1`. Install `requirements-ten-vad.txt`
+and, on Linux x64, `libc++1`. Windows x64 is supported by the upstream DLL.
+The native library is loaded and exercised before accepting calls. No cloud
+request, recording, new model billing or automatic fallback is involved.
+
+Each call has separate STT and interruption classifier state. Only the detector
+input is continuously interpolated from 8 to 16 kHz, in two 10 ms hops per
+canonical frame, with threshold 0.5. STT keeps the original 8 kHz PCM, 200 ms
+preroll and 500 ms trailing silence. Barge-in retains its duration/energy guards
+and feeds even quiet frames to the classifier. Default energy mode and optional
+WebRTC remain unchanged. This does not change Conversation or text settling.
+
+Upstream's [license](https://github.com/TEN-framework/ten-vad/blob/d68ab71c8d5fbd8f98e97ae7c9986af76b5d72b1/LICENSE)
+is Apache 2.0 with additional Agora conditions, including restrictions on
+competing offerings; it is not the unmodified Apache license.
+
+`stt_endpoint` records buffered audio, classified speech and trailing silence
+durations plus the boundary reason (`silence`, `limit`, or explicit `flush`).
+It contains no audio or transcript. Combined with STT/AI/first-audio timestamps,
+this separates acoustic waiting from provider and playback latency.
+
 The PBX adapter authenticates to `POST /internal/v1/pbx/calls` with `X-PBX-Token`
 and JSON `{ "call_id": "<UUID>", "number": "+375…" }`. It supplies a new UUID
 and the trusted called DID. Owner and agent fields are rejected. Registration is

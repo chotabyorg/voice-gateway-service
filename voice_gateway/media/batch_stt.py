@@ -113,12 +113,25 @@ class BatchSTT(BaseSTT):
         if len(self._active_tasks) >= self.queue.max_pending:
             self.emit("stt_backlog_rejected", pending_tasks=len(self._active_tasks))
             raise RuntimeError("Live transcription backlog exceeded; audio remains buffered")
+        endpoint = {
+            "audio_ms": round(self.vad.buffer_ms),
+            "speech_ms": round(self.vad.speech_ms),
+            "silence_ms": round(self.vad.silence_ms),
+            "endpoint_reason": (
+                "silence"
+                if self.vad.silence_ms >= self.vad.settings.silence_end_ms
+                else "limit"
+                if self.vad.buffer_ms >= self.vad.settings.max_utterance_ms
+                else "flush"
+            ),
+        }
         pcm = self.vad.take()
         if not pcm:
             return
         if len(pcm) > self.queue.max_utterance_bytes:
             self.emit("stt_utterance_rejected", audio_bytes=len(pcm))
             return
+        self.emit("stt_endpoint", **endpoint)
         task = asyncio.create_task(
             self._transcribe_and_callback(
                 pcm, self._last_transcription_task, self._speech_ended_at, time.monotonic()

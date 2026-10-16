@@ -45,7 +45,7 @@ class LiveSettings(BaseSettings):
     stt_api_key: SecretStr
     stt_model: str = Field(min_length=1, max_length=200)
     stt_language: Literal["", "ru", "en", "be"] = "ru"
-    vad: Literal["energy", "webrtc"] = "energy"
+    vad: Literal["energy", "webrtc", "ten"] = "energy"
     tts_provider: Literal["edge", "openrouter"]
     tts_api_key: SecretStr = SecretStr("")
     tts_model: str = Field(default="", max_length=200)
@@ -133,6 +133,16 @@ def build_live_runtime(settings, config=None):
         from voice_gateway.speech_activity import WebRTCSpeech
 
         classifier_factory = WebRTCSpeech
+    elif config.vad == "ten":
+        if importlib.util.find_spec("ten_vad") is None:
+            raise ValueError("Selected TEN speech classifier is unavailable")
+        from voice_gateway.speech_activity import TenSpeech
+
+        # Load and exercise the native library before accepting any calls.
+        # A missing libc++/DLL must fail startup, not the first live call.
+        TenSpeech()(bytes(320))
+        classifier_factory = TenSpeech
+
     queue = BatchSTTSettings(max_pending=4)
     vad = VADSettings(max_utterance_ms=30000, min_speech_ms=120 if classifier_factory else 80)
     if config.stt_provider == "groq":

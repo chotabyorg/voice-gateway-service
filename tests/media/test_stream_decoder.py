@@ -164,3 +164,29 @@ async def test_real_ffmpeg_resamples_mp3_to_8khz_mono(children):
     pcm = b"".join(chunks)
     # MP3 encoding adds bounded padding; 0.2 s at 8 kHz PCM16 requires 3200 bytes.
     assert 3200 <= len(pcm) < 6400 and any(pcm)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="optional local ffmpeg is unavailable")
+async def test_real_raw_pcm_first_output_precedes_end_and_keeps_duration(children):
+    import math
+    import struct
+
+    signal = struct.pack(
+        "<24000h", *[round(4000 * math.sin(2 * math.pi * 440 * i / 24000)) for i in range(24000)]
+    )
+    release = asyncio.Event()
+
+    async def network_chunks():
+        yield signal[:24000]  # Half a second, then a delayed network tail.
+        await release.wait()
+        for offset in range(24000, len(signal), 113):
+            yield signal[offset : offset + 113]
+
+    async with aclosing(
+        decode_audio_stream(network_chunks(), input_pcm_rate=24000, timeout=5)
+    ) as stream:
+        first = await asyncio.wait_for(anext(stream), 2)
+        assert first and not release.is_set()
+        release.set()
+        result = first + b"".join([chunk async for chunk in stream])
+    assert len(result) == 16000

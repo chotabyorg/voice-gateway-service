@@ -18,6 +18,15 @@ Configuration uses `VOICE_LIVE_` with these required suffixes:
 - `TTS_PROVIDER` (`edge` or `openrouter`), `TTS_VOICE`
 - For OpenRouter TTS: `TTS_API_KEY`, `TTS_MODEL`
 
+Optional `VOICE_LIVE_TTS_FORMAT=pcm` selects raw PCM streaming for OpenRouter
+instead of the default MP3. Only a single `audio/pcm` Content-Type declaring
+`rate=24000;channels=1` is accepted. The bounded decoder explicitly consumes
+PCM16 little-endian and resamples to canonical 8 kHz mono, without MP3 format
+probing; output is flushed as it becomes available. Ambiguous format metadata,
+truncated samples, byte limits and timeouts fail explicitly. Cancellation still
+closes the provider stream and reaps the decoder. This option does not change
+the TTS model or voice, call authority, playback facts, or text channels.
+
 Optional `STT_LANGUAGE` defaults to `ru`. Credentials belong in a protected
 service environment, never source or browser settings. Selected provider
 dependencies and ffmpeg are required before the listener starts. Each call owns

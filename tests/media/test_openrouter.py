@@ -139,13 +139,55 @@ async def decode_fixture(chunks, **kwargs):
         yield pcm(1000)
 
 
-async def test_tts_yields_before_response_end_and_cancellation_closes_http_and_decoder():
+@pytest.mark.parametrize(
+    "mime",
+    [
+        "audio/pcm;rate=24000;channels=1",
+        "audio/pcm",
+        "audio/pcm;rate=48000;channels=1",
+        "audio/pcm;rate=24000;channels=2",
+        "audio/pcm;rate=24000;rate=24000;channels=1",
+    ],
+)
+async def test_tts_pcm_requires_unambiguous_24k_mono_metadata(mime):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": mime}, content=b"\0" * 2048)
+
+    async def decode(chunks, **kwargs):
+        assert kwargs["input_pcm_rate"] == 24000
+        async for _ in chunks:
+            yield pcm(1000)
+
+    tts = OpenRouterTTS(
+        OpenRouterTTSSettings("fixture-key", "fixture/tts", response_format="pcm"),
+        client_factory=factory(handler, []),
+        decoder=decode,
+    )
+    try:
+        if mime == "audio/pcm;rate=24000;channels=1":
+            assert await tts.synthesize("Fixture")
+        else:
+            with pytest.raises(ValueError, match="raw TTS"):
+                await tts.synthesize("Fixture")
+        assert requests[0]["response_format"] == "pcm"
+    finally:
+        await tts.close()
+
+
+@pytest.mark.parametrize("audio_format", ["mp3", "pcm"])
+async def test_tts_yields_before_response_end_and_cancellation_closes_http_and_decoder(
+    audio_format,
+):
     stream, clients, requests = AudioStream(stall=True), [], []
     decoder_closed = asyncio.Event()
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=stream)
+        mime = "audio/mpeg" if audio_format == "mp3" else "audio/pcm;rate=24000;channels=1"
+        return httpx.Response(200, headers={"content-type": mime}, stream=stream)
 
     async def decode(chunks, **kwargs):
         try:
@@ -155,7 +197,9 @@ async def test_tts_yields_before_response_end_and_cancellation_closes_http_and_d
             decoder_closed.set()
 
     tts = OpenRouterTTS(
-        OpenRouterTTSSettings("fixture-key", "fixture/tts", voice="fixture-voice"),
+        OpenRouterTTSSettings(
+            "fixture-key", "fixture/tts", voice="fixture-voice", response_format=audio_format
+        ),
         client_factory=factory(handler, clients),
         decoder=decode,
     )
@@ -165,7 +209,7 @@ async def test_tts_yields_before_response_end_and_cancellation_closes_http_and_d
     assert body == {
         "model": "fixture/tts",
         "input": "Fixture",
-        "response_format": "mp3",
+        "response_format": audio_format,
         "voice": "fixture-voice",
     }
     assert str(requests[0].url) == BASE_URL + "/audio/speech"
@@ -177,6 +221,23 @@ async def test_tts_yields_before_response_end_and_cancellation_closes_http_and_d
     assert stream.closed and decoder_closed.is_set()
     await tts.close()
     assert clients[1].is_closed
+
+
+async def test_tts_raw_pcm_rejects_truncated_sample_and_closes_response():
+    response = httpx.Response(
+        200, headers={"content-type": "audio/pcm;rate=24000;channels=1"}, content=b"\0" * 1025
+    )
+    tts = OpenRouterTTS(
+        OpenRouterTTSSettings("fixture-key", "fixture/tts", response_format="pcm"),
+        client_factory=factory(lambda req: response, []),
+        decoder=decode_fixture,
+    )
+    try:
+        with pytest.raises(ValueError, match="Incomplete raw"):
+            await tts.synthesize("Fixture")
+        assert response.is_closed
+    finally:
+        await tts.close()
 
 
 @pytest.mark.parametrize("mime", ["application/json", "audio/wav", "text/plain"])

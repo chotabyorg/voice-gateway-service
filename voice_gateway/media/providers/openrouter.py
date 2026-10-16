@@ -44,6 +44,7 @@ class OpenRouterSTTSettings(OpenRouterSettings):
 @dataclass(frozen=True)
 class OpenRouterTTSSettings(OpenRouterSettings):
     voice: str = ""
+    response_format: str = "mp3"
     max_text_chars: int = 2000
     max_mp3_bytes: int = 3_000_000
     max_pcm_bytes: int = 1_920_000
@@ -56,6 +57,7 @@ class OpenRouterTTSSettings(OpenRouterSettings):
             or not 1 <= self.max_mp3_bytes <= 8 * 1024 * 1024
             or not 2 <= self.max_pcm_bytes <= 8 * 1024 * 1024
             or not 0 < self.stream_timeout <= 600
+            or self.response_format not in {"mp3", "pcm"}
         ):
             raise ValueError("Invalid TTS limits")
 
@@ -174,7 +176,11 @@ class OpenRouterTTS(BaseTTS):
             return
         if len(text) > self.settings.max_text_chars:
             raise ValueError("TTS text exceeds configured limit")
-        body = {"model": self.settings.model, "input": text, "response_format": "mp3"}
+        body = {
+            "model": self.settings.model,
+            "input": text,
+            "response_format": self.settings.response_format,
+        }
         if self.settings.voice:
             body["voice"] = self.settings.voice
         deadline = asyncio.get_running_loop().time() + self.settings.stream_timeout
@@ -188,7 +194,26 @@ class OpenRouterTTS(BaseTTS):
                         headers=self.http.headers,
                     )
                 )
-            _check_response(response, {"audio/mpeg", "audio/mp3", "application/octet-stream"})
+            pcm_input = self.settings.response_format == "pcm"
+            _check_response(
+                response,
+                {"audio/pcm"}
+                if pcm_input
+                else {"audio/mpeg", "audio/mp3", "application/octet-stream"},
+            )
+            if pcm_input:
+                # Raw audio has no WAV header. Fail closed rather than play
+                # unverified sample rate/channel metadata at the wrong speed.
+                fields = response.headers.get_list("content-type")
+                parts = fields[0].lower().split(";")
+                parameters = [p.strip().split("=", 1) for p in parts[1:]]
+                if (
+                    len(fields) != 1
+                    or any(len(p) != 2 for p in parameters)
+                    or len(parameters) != 2
+                    or dict(parameters) != {"rate": "24000", "channels": "1"}
+                ):
+                    raise ValueError("Unsupported raw TTS audio format")
 
             async def encoded():
                 received = 0
@@ -198,6 +223,8 @@ class OpenRouterTTS(BaseTTS):
                         raise ValueError("TTS audio exceeds configured limit")
                     for offset in range(0, len(chunk), 65536):
                         yield chunk[offset : offset + 65536]
+                if pcm_input and received % 2:
+                    raise ValueError("Incomplete raw TTS PCM sample")
 
             received = 0
             async with aclosing(encoded()) as source:
@@ -207,6 +234,7 @@ class OpenRouterTTS(BaseTTS):
                         max_input_bytes=self.settings.max_mp3_bytes,
                         max_output_bytes=self.settings.max_pcm_bytes,
                         timeout=self.settings.stream_timeout,
+                        **({"input_pcm_rate": 24000} if pcm_input else {}),
                     )
                 ) as decoded:
                     while True:

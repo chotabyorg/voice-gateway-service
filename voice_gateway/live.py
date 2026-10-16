@@ -50,6 +50,7 @@ class LiveSettings(BaseSettings):
     tts_api_key: SecretStr = SecretStr("")
     tts_model: str = Field(default="", max_length=200)
     tts_voice: str = Field(min_length=1, max_length=200)
+    tts_format: Literal["mp3", "pcm"] = "mp3"
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -184,6 +185,7 @@ def build_live_runtime(settings, config=None):
             api_key=config.tts_api_key.get_secret_value(),
             model=config.tts_model,
             voice=config.tts_voice,
+            response_format=config.tts_format,
         )
 
         def tts_factory():

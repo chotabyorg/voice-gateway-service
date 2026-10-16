@@ -23,7 +23,10 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    call owner and PCM pipeline. See [live runtime](live-runtime.md).
 2. `BatchSTT` keeps a bounded acoustic utterance in memory, applies energy VAD
    and end-of-speech, limits provider concurrency/backlog, and returns a final
-   transcript through a callback.
+   transcript through a callback. Optional SpeechKit v3 instead streams audio
+   during speech over one bounded RPC per acoustic utterance. The same local
+   VAD confirms the endpoint; only ordered final transcripts reach the callback.
+   Provider partials and provider endpoint hints cannot grant a turn.
 3. `UtteranceCoordinator` can combine closely spaced acoustic finals. It is a
    media heuristic; it does not schedule or own a Main Chota `AgentTurn`.
 4. `VoiceToConversationPort` is the typed local seam for call start/end, final

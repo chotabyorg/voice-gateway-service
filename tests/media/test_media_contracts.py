@@ -49,6 +49,11 @@ def test_core_dependency_boundary_and_import_without_site_packages():
                 else []
             )
             for module in modules:
+                if path == media / "providers" / "speechkit.py" and module.split(".")[0] in {
+                    "grpc",
+                    "yandex",
+                }:
+                    continue  # Optional SpeechKit SDK, imported only at explicit activation.
                 assert module.split(".")[0] in sys.stdlib_module_names | {
                     "voice_gateway",
                     "groq",

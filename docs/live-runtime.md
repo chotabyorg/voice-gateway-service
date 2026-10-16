@@ -14,8 +14,8 @@ Configuration uses `VOICE_LIVE_` with these required suffixes:
 - `PBX_TOKEN` (separate from both service credentials)
 - `VOICE_REVISION`, `CONVERSATION_REVISION` (exact source SHA1s)
 - `ALLOWED_NUMBERS` (explicit comma-separated Belarus DID cohort)
-- `STT_PROVIDER` (`groq` or `openrouter`), `STT_API_KEY`, `STT_MODEL`
-- `TTS_PROVIDER` (`edge` or `openrouter`), `TTS_VOICE`
+- `STT_PROVIDER` (`groq`, `openrouter` or `speechkit`), `STT_API_KEY`, `STT_MODEL`
+- `TTS_PROVIDER` (`edge`, `openrouter` or `speechkit`), `TTS_VOICE`
 - For OpenRouter TTS: `TTS_API_KEY`, `TTS_MODEL`
 
 Optional `VOICE_LIVE_TTS_FORMAT=pcm` selects raw PCM streaming for OpenRouter
@@ -50,6 +50,53 @@ text settling, final admission, or AI/playback authorization.
 metadata only. The confirmed event's `duration_ms` measures overlapped waiting,
 not guaranteed end-to-end savings. With a 200 ms start and 500 ms endpoint,
 up to 300 ms of provider work can overlap; network/model/TTS latency remains.
+
+### SpeechKit v3 streaming (opt-in)
+
+Install `requirements-speechkit.txt` in addition to the base runtime. Choose
+STT and TTS independently; neither replaces an existing provider automatically.
+An active Yandex Cloud folder and least-privilege service-account API key are
+required. Use `ai.speechkit-stt.user` / `ai.speechkit-tts.user` roles and matching
+`yc.ai.speechkitStt.execute` / `yc.ai.speechkitTts.execute` key scopes. Store the
+credential only in the protected service environment.
+
+STT: `STT_PROVIDER=speechkit`, `STT_MODEL=general`, `STT_LANGUAGE=ru`,
+`STT_EARLY_START_MS=0`. This uses API v3 REAL_TIME recognition with PCM16 mono
+8 kHz, ru-RU whitelist, disabled text refinement and external EOU. Audio starts
+streaming after minimum local speech confirmation, including bounded preroll.
+The existing local 500 ms endpoint sends EOU; partials never enter Conversation.
+One TLS channel is reused per call, with at most four pending utterances and
+100 queued 20 ms frames per RPC. RPC failures, queue overflow or missing final
+completion fail explicitly; there are no provider retries or silent fallback.
+Hangup cancels work without flushing unfinished speech. `stt_request_timing`
+measures waiting after the confirmed endpoint, not total RPC time.
+
+TTS: `TTS_PROVIDER=speechkit`, `TTS_MODEL=livetts`, `TTS_VOICE=sofia`,
+`TTS_ROLE=support`, `TTS_FORMAT=pcm`. Supported candidate combinations are
+LiveTTS sofia/vera with support/casual, and general marina with
+neutral/friendly/whisper. `TTS_EXPAND_BYN=true` retains natural Belarusian
+currency pronunciation. LiveTTS uses LUFS without speed/pitch overrides.
+`StreamSynthesis` emits telephone PCM directly, without ffmpeg or resampling.
+Separate text-only messages are accepted; they are not completion or playback
+evidence. Audio length, message size and duration are bounded. Barge-in closes
+the RPC; incomplete audio or a midstream error stays a failed/partial playback.
+Only fully authorized Conversation speech is submitted, never model drafts.
+
+Both adapters send `x-data-logging-enabled: false`, log metadata only and retain
+no audio files. Belarus PBX routing, DID validation, Conversation authority,
+Gemma configuration and all text-channel queues remain unchanged.
+
+Current status and measurements: [SpeechKit validation](speechkit-validation.md).
+
+### Optional native OpenRouter PCM conversion
+
+`TTS_NATIVE_PCM_RESAMPLER=true` with OpenRouter `TTS_FORMAT=pcm` selects a bounded
+241-tap FIR converter from 24 to 8 kHz. Default remains the existing ffmpeg path.
+The filter preserves the telephone band and attenuates aliases above 4 kHz;
+it adds 5 ms lookahead and preserves the final sample duration by edge padding.
+On three matched synthetic Voice-host trials, first audio improved only 11–17 ms.
+This is not a solution to multi-second STT/AI latency. It has not been activated
+on the live pilot; SpeechKit does not use this converter.
 
 Optional `VOICE_LIVE_VAD=webrtc` selects a local WebRTC speech classifier instead
 of the default energy threshold. It operates on 20 ms, 8 kHz PCM frames and

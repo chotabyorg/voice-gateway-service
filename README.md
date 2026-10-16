@@ -75,6 +75,12 @@ TTS, Groq Whisper STT and Edge TTS adapters. Dependencies are optional
 OpenRouter and Edge TTS require an external ffmpeg decoder, which is not included
 in the default container. No real provider key is needed for the tests.
 
+SpeechKit API v3 streaming STT/TTS is an optional explicit provider composition
+(`requirements-speechkit.txt`). It preserves local endpointing and Conversation
+playback authority and can emit telephone PCM without a decoder. See
+[`docs/live-runtime.md`](docs/live-runtime.md) and the separate
+[`provider acceptance status`](docs/speechkit-validation.md).
+
 See [`docs/provider-adapters.md`](docs/provider-adapters.md) for explicit
 composition, bounds, cancellation behavior and the limits of local validation.
 

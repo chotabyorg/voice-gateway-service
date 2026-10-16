@@ -12,16 +12,25 @@ async def decode_audio_stream(
     max_input_bytes=3_000_000,
     max_output_bytes=1_920_000,
     timeout=120,
+    input_pcm_rate=None,
 ):
     if timeout <= 0 or max_input_bytes < 1 or max_output_bytes < 2:
         raise ValueError("Invalid decoder bounds")
+    if input_pcm_rate not in (None, 24000):
+        raise ValueError("Unsupported raw PCM sample rate")
     deadline = asyncio.get_running_loop().time() + timeout
     command = [executable] if isinstance(executable, str) else list(executable)
+    input_options = (
+        ["-f", "s16le", "-ar", "24000", "-ac", "1", "-probesize", "32", "-analyzeduration", "0"]
+        if input_pcm_rate
+        else []
+    )
     process = await asyncio.create_subprocess_exec(
         *command,
         "-hide_banner",
         "-loglevel",
         "error",
+        *input_options,
         "-i",
         "pipe:0",
         "-f",
@@ -31,6 +40,8 @@ async def decode_audio_stream(
         "-ar",
         "8000",
         "-ac",
+        "1",
+        "-flush_packets",
         "1",
         "pipe:1",
         stdin=asyncio.subprocess.PIPE,

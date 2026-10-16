@@ -21,6 +21,15 @@ reuse, barge-in, hangup, timeout, byte limits and failure after partial audio.
 Configuration rejects mismatched model/voice families and batch speculation for
 streaming STT. Default mode and existing provider selections are unchanged.
 
+Streaming STT additionally accepts server `final_refinement` events: the
+normalized text replaces the matching raw final segment by index, raw text is
+kept when a refinement is missing or empty, and oversized or out-of-range
+refinements fail explicitly without retry. Informational server messages
+(session id, wall-clock-only and classifier/analysis updates) are ignored;
+only final transcript text can enter Conversation. A live provider probe
+(TTS-synthesized Russian phrase fed back through the exact live STT path)
+returned a final with no errors after this change.
+
 ## Real provider gate
 
 Least-privilege service account/key creation succeeded in the initially selected

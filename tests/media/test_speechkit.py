@@ -8,7 +8,11 @@ from yandex.cloud.ai.stt.v3 import stt_pb2 as p
 from yandex.cloud.ai.stt.v3 import stt_service_pb2_grpc as service
 
 from tests.media.media_fakes import pcm
-from voice_gateway.media.providers.speechkit import SpeechKitSettings, SpeechKitSTT
+from voice_gateway.media.providers.speechkit import (
+    SpeechKitSettings,
+    SpeechKitSTT,
+    _Utterance,
+)
 from voice_gateway.media.vad import VADSettings
 
 
@@ -267,6 +271,50 @@ async def test_refinement_out_of_range_fails_explicitly_without_final(provider):
     finally:
         await stt.abort_stream()
     assert not stt._tasks and not stt._rpcs
+
+
+async def test_continuous_speech_beyond_two_seconds_keeps_streaming(provider):
+    fake, connect = provider
+    finals = []
+
+    async def final(text):
+        finals.append(text)
+
+    stt = SpeechKitSTT(SpeechKitSettings("fixture-secret"), connection_factory=connect)
+    await stt.start_stream(on_final=final)
+    try:
+        # A single breathless phrase longer than the old 100-frame bound.
+        await stt.feed_audio(pcm(1800, 3000))
+        await stt.feed_audio(pcm(0, 600))
+        await wait_until(lambda: finals)
+        assert finals == ["fixture 0"]
+    finally:
+        await stt.abort_stream()
+    assert not stt._tasks and not stt._rpcs
+
+
+async def test_audio_backlog_overflow_reports_frames_and_limit():
+    events = []
+
+    def observer(event, **values):
+        events.append((event, values))
+
+    stt = SpeechKitSTT(
+        SpeechKitSettings("fixture-secret", max_audio_queue_frames=32),
+        emit=observer,
+    )
+    utterance = _Utterance(audio=asyncio.Queue(32))
+    for _ in range(32):
+        utterance.audio.put_nowait(b"\x00" * 320)
+    with pytest.raises(RuntimeError, match="backlog"):
+        stt._enqueue(utterance, b"\x00" * 320)
+    assert events == [("stt_audio_backlog", {"frames": 32, "limit": 32})]
+
+
+def test_audio_queue_bound_covers_full_utterance_but_stays_finite():
+    assert SpeechKitSettings("fixture-secret").max_audio_queue_frames >= 1500
+    with pytest.raises(ValueError):
+        SpeechKitSettings("fixture-secret", max_audio_queue_frames=4097)
 
 
 def test_bad_speechkit_configuration_is_rejected():

@@ -272,3 +272,32 @@ async def test_speechkit_explicit_activation_uses_telephone_pcm_without_ffmpeg(m
     ]:
         with pytest.raises(ValidationError):
             config(**{**settings, **changes})
+
+
+async def test_greeting_strip_is_opt_in_and_wraps_adapter(monkeypatch):
+    from voice_gateway.media.providers.greeting import GreetingStripTTS
+    from voice_gateway.media.providers.speechkit import SpeechKitTTS
+
+    monkeypatch.setattr("voice_gateway.live.shutil.which", lambda name: None)
+    settings = dict(
+        stt_provider="speechkit",
+        stt_model="general",
+        tts_provider="speechkit",
+        tts_model="livetts",
+        tts_voice="sofia",
+        tts_format="pcm",
+    )
+    bare = build_live_runtime(Settings(mode="live_audiosocket"), config(**settings))
+    try:
+        assert isinstance(bare.tts_factory(), SpeechKitTTS)
+    finally:
+        await bare.stop()
+    wrapped = build_live_runtime(
+        Settings(mode="live_audiosocket"), config(**settings, tts_strip_greeting=True)
+    )
+    try:
+        adapter = wrapped.tts_factory()
+        assert isinstance(adapter, GreetingStripTTS)
+        assert isinstance(adapter._inner, SpeechKitTTS)
+    finally:
+        await wrapped.stop()

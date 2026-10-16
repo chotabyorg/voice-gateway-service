@@ -55,6 +55,7 @@ class LiveSettings(BaseSettings):
     tts_format: Literal["mp3", "pcm"] = "mp3"
     tts_expand_byn: bool = False
     tts_native_pcm_resampler: bool = False
+    tts_strip_greeting: bool = False
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -213,11 +214,20 @@ def build_live_runtime(settings, config=None):
                 speech_classifier=classifier_factory() if classifier_factory else None,
             )
 
+    # Optional greeting suppression for lines whose opening is covered by a
+    # PBX announcement. Disabled by default: factories return bare adapters.
+    from voice_gateway.media.providers.greeting import GreetingStripTTS
+
+    def _voiced(inner):
+        if not config.tts_strip_greeting:
+            return inner
+        return GreetingStripTTS(inner)
+
     if config.tts_provider == "edge":
         tts_config = EdgeTTSSettings(voice=config.tts_voice)
 
         def tts_factory():
-            return EdgeTTS(tts_config)
+            return _voiced(EdgeTTS(tts_config))
     elif config.tts_provider == "speechkit":
         from voice_gateway.media.providers.speechkit import SpeechKitTTS, SpeechKitTTSSettings
 
@@ -230,7 +240,7 @@ def build_live_runtime(settings, config=None):
         )
 
         def tts_factory():
-            return SpeechKitTTS(tts_config)
+            return _voiced(SpeechKitTTS(tts_config))
     else:
         tts_config = OpenRouterTTSSettings(
             api_key=config.tts_api_key.get_secret_value(),
@@ -242,7 +252,7 @@ def build_live_runtime(settings, config=None):
         )
 
         def tts_factory():
-            return OpenRouterTTS(tts_config)
+            return _voiced(OpenRouterTTS(tts_config))
 
     routes = ControlPlaneRoutes(
         config.control_plane_url,

@@ -177,6 +177,32 @@ async def test_tts_pcm_requires_unambiguous_24k_mono_metadata(mime):
         await tts.close()
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_byn_pronunciation_is_explicit_and_changes_only_tts_input(enabled):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": "audio/mpeg"}, content=b"fixture")
+
+    async def decode(chunks, **kwargs):
+        async for _ in chunks:
+            yield pcm(1000)
+
+    tts = OpenRouterTTS(
+        OpenRouterTTSSettings("fixture-key", "fixture/tts", expand_byn=enabled),
+        client_factory=factory(handler, []),
+        decoder=decode,
+    )
+    text = "Стрижка стоит 50 BYN."
+    try:
+        assert await tts.synthesize(text)
+        assert requests[0]["input"] == ("Стрижка стоит 50 белорусских рублей." if enabled else text)
+        assert text == "Стрижка стоит 50 BYN."
+    finally:
+        await tts.close()
+
+
 @pytest.mark.parametrize("audio_format", ["mp3", "pcm"])
 async def test_tts_yields_before_response_end_and_cancellation_closes_http_and_decoder(
     audio_format,

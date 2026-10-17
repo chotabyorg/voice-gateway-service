@@ -31,6 +31,15 @@ def active_call(tts=None, **kwargs):
     return call
 
 
+async def test_stock_opening_only_segment_is_not_spoken():
+    tts = FakeTTS()
+    call = active_call(tts)
+    spoken = await call.speak("open", 'Здравствуйте! Вы обратились в Салон красоты "У Светланы".')
+    assert spoken is False
+    assert tts.texts == []
+    assert call.conversation_port.playback[-1].state == PlaybackState.NOT_STARTED
+
+
 async def test_closed_audiosocket_cannot_claim_accepted_audio():
     transport = AudioSocketTransport(asyncio.StreamReader(), FakeWriter())
     await transport.close()

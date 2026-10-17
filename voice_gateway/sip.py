@@ -10,6 +10,7 @@ import ipaddress
 import logging
 import re
 import threading
+import time
 from collections import deque
 from uuid import uuid4
 
@@ -22,6 +23,15 @@ from voice_gateway.media.interfaces import CallTransport, TransportIdleTimeout
 from voice_gateway.routing import Registration, RoutingUnavailable
 
 logger = logging.getLogger(__name__)
+
+# Spoken while every conversation session is busy; the caller is held on the
+# line until a slot frees. Authorized agent speech still always comes from
+# Conversation — these are fixed transport announcements only.
+BUSY_MESSAGE = (
+    "Сейчас достигнуто максимальное количество одновременных разговоров. "
+    "Пожалуйста, ожидайте на линии."
+)
+BUSY_TIMEOUT_MESSAGE = "К сожалению, все линии всё ещё заняты. Пожалуйста, перезвоните чуть позже."
 
 
 class SIPSettings(BaseSettings):
@@ -37,6 +47,8 @@ class SIPSettings(BaseSettings):
     server_port: int = Field(default=5060, ge=1, le=65535)
     rtp_port: int = Field(default=14000, ge=1024, le=65000)
     max_calls: int = Field(default=2, ge=1, le=32)
+    max_waiting: int = Field(default=2, ge=0, le=8)
+    busy_hold_seconds: float = Field(default=90, ge=0, le=600)
     registration_timeout: float = Field(default=15, gt=0, le=60)
     media_idle_timeout: float = Field(default=30, gt=0, le=300)
     input_gain: int = Field(default=1, ge=1, le=32)
@@ -49,7 +61,7 @@ class SIPSettings(BaseSettings):
         if (
             not self.password.get_secret_value()
             or self.rtp_port % 2
-            or self.rtp_port + 2 * self.max_calls > 65535
+            or self.rtp_port + 2 * (self.max_calls + self.max_waiting) > 65535
         ):
             raise ValueError("Invalid SIP credentials or media port range")
         return self
@@ -186,6 +198,7 @@ class SIPTransport(CallTransport):
         self.client, self.call = client, call
         self.call_id = str(uuid4())
         self.caller_number = ""
+        self.queued = False
         self.audio = PCMBuffer()
         self.ready = asyncio.Event()
         self.disconnected = False
@@ -212,6 +225,21 @@ class SIPTransport(CallTransport):
                     await asyncio.sleep(0.01)
         except TimeoutError:
             raise TransportIdleTimeout("SIP media idle timeout") from None
+
+    async def drain_audio(self):
+        """Discard buffered caller audio while a held call waits for a slot.
+
+        The bounded native input buffer fails the call if it is never read, so a
+        queued caller's audio must be consumed while they wait on the line.
+        """
+        while True:
+            pcm = self.audio.read()
+            if pcm is None:
+                return False
+            if not pcm:
+                return True
+            self.input_bytes += len(pcm)
+            self.input_rms_max = max(self.input_rms_max, rms(pcm))
 
     async def write_audio_chunk(self, chunk):
         if len(chunk) % 2 or len(chunk) > 65536:
@@ -247,13 +275,17 @@ class SIPTransport(CallTransport):
 
 
 class SIPClient:
-    def __init__(self, settings, handle_transport, registry, pj=None):
+    def __init__(
+        self, settings, handle_transport, registry, pj=None, *, capacity=None, announce=None
+    ):
         self.settings, self.handle_transport, self.registry, self.pj = (
             settings,
             handle_transport,
             registry,
             pj,
         )
+        self.capacity = capacity
+        self.announce = announce
         self.endpoint = self.account = self.poll_task = self.close_task = None
         self.calls, self.tasks = {}, set()
         self.registration = asyncio.Event()
@@ -270,7 +302,7 @@ class SIPClient:
         try:
             ep = pj.EpConfig()
             ep.uaConfig.threadCnt, ep.uaConfig.mainThreadOnly = 0, True
-            ep.uaConfig.maxCalls = self.settings.max_calls
+            ep.uaConfig.maxCalls = self.settings.max_calls + self.settings.max_waiting
             ep.uaConfig.userAgent = "Chota-Voice-Gateway"
             ep.medConfig.clockRate = ep.medConfig.sndClockRate = 8000
             ep.medConfig.audioFramePtime, ep.medConfig.ecTailLen = 20, 0
@@ -314,7 +346,10 @@ class SIPClient:
             ) = 0
             media = config.mediaConfig.transportConfig
             media.boundAddress = media.publicAddress = self.settings.bind_address
-            media.port, media.portRange = self.settings.rtp_port, 2 * self.settings.max_calls
+            media.port, media.portRange = (
+                self.settings.rtp_port,
+                2 * (self.settings.max_calls + self.settings.max_waiting),
+            )
             self.account = account_type()
             self.poll_task = asyncio.create_task(self._poll())
             self.account.create(config)
@@ -447,13 +482,19 @@ class SIPClient:
         options.opt.audioCount, options.opt.videoCount = 1, 0
         options.statusCode = 486
         try:
-            if not self.stopping and self.registered and len(self.calls) <= self.settings.max_calls:
-                number = called_did(self.settings, received)
-                transport = SIPTransport(self, call)
-                transport.caller_number = caller_number(received)
-                self.registry.register(Registration(call_id=transport.call_id, number=number))
-                call.transport = transport
-                options.statusCode = 200
+            if not self.stopping and self.registered:
+                queued = self.capacity is not None
+                # Without a queue callback the adapter keeps its fixed admission
+                # bound; with one it also answers a few callers to hold them.
+                limit = self.settings.max_calls + (self.settings.max_waiting if queued else 0)
+                if len(self.calls) <= limit:
+                    number = called_did(self.settings, received)
+                    transport = SIPTransport(self, call)
+                    transport.caller_number = caller_number(received)
+                    transport.queued = queued and not self.capacity()
+                    self.registry.register(Registration(call_id=transport.call_id, number=number))
+                    call.transport = transport
+                    options.statusCode = 200
         except Exception:
             options.statusCode = 403
         try:
@@ -480,7 +521,10 @@ class SIPClient:
 
     async def _run_session(self, call):
         try:
-            await self.handle_transport(call.transport)
+            if call.transport.queued:
+                await self._serve_queued(call.transport)
+            else:
+                await self.handle_transport(call.transport)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -490,6 +534,30 @@ class SIPClient:
             call.running = False
             if call.finished:
                 self._retire(call)
+
+    async def _serve_queued(self, transport):
+        """Warn a caller that every session is busy, then wait for a free slot.
+
+        The caller hears the announcement and stays on the line; as soon as a
+        session ends they are handed to the normal authorized conversation.
+        """
+        awaiting = self.capacity is None or not self.capacity()
+        if awaiting and self.announce is not None:
+            await self.announce(transport, BUSY_MESSAGE)
+        deadline = time.monotonic() + self.settings.busy_hold_seconds
+        while time.monotonic() < deadline:
+            if not await transport.drain_audio():
+                return  # Caller hung up while waiting.
+            if self.capacity is None or self.capacity():
+                break
+            await asyncio.sleep(0.2)
+        if self.capacity is None or self.capacity():
+            logger.info("sip_queued_call_admitted")
+            await self.handle_transport(transport)
+            return
+        if self.announce is not None:
+            await self.announce(transport, BUSY_TIMEOUT_MESSAGE)
+        logger.info("sip_queued_call_timed_out")
 
     def hangup(self, call):
         if call.finished:

@@ -41,13 +41,29 @@ _OFFER = re.compile(
 )
 
 
+def _strip_leading(text: str) -> str:
+    """Drop one leading greeting and one stock self-introduction; may be empty."""
+    stripped = _GREETING.sub("", text, count=1).lstrip()
+    return _INTRO.sub("", stripped, count=1).lstrip()
+
+
 def strip_leading_greeting(text: str) -> str:
     """Remove one leading greeting and one stock self-introduction; never empty."""
     if not isinstance(text, str):
         raise ValueError("Invalid speech text")
-    stripped = _GREETING.sub("", text, count=1).lstrip()
-    stripped = _INTRO.sub("", stripped, count=1).lstrip()
-    return stripped or text
+    return _strip_leading(text) or text
+
+
+def has_meaningful_speech(text: str) -> bool:
+    """False when a segment is only stock greeting/introduction formulas.
+
+    A model that streams a call opening as separate sentences sends
+    "Здравствуйте! Вы обратились в ..." first; that segment carries no content,
+    so speaking it would repeat a greeting the telephone station already made.
+    """
+    if not isinstance(text, str):
+        raise ValueError("Invalid speech text")
+    return bool(_strip_leading(text))
 
 
 def strip_trailing_offer(text: str) -> str:

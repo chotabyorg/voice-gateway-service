@@ -11,7 +11,7 @@ from voice_gateway.media.call import IDLE_MARKER, CallState, MediaCall, MediaSet
 
 @pytest.mark.asyncio
 async def test_idle_prompt_admits_one_synthetic_turn():
-    port = FakeConversationPort(None)
+    port = FakeConversationPort()
     call = MediaCall(
         FakeTransport(),
         FakeSTT(),
@@ -37,13 +37,33 @@ async def test_hard_silence_ends_the_call_after_the_last_nudge():
         FakeTransport(),
         FakeSTT(),
         FakeTTS(),
-        FakeConversationPort(None),
+        FakeConversationPort(),
         settings=MediaSettings(idle_prompt_seconds=0.05, max_idle_prompts=1),
     )
     call.state = CallState.ACTIVE
     await call._idle_prompts()
     assert call._idle_nudges == 1
     assert call._end_call.is_set()
+
+
+@pytest.mark.asyncio
+async def test_caller_is_not_nudged_while_the_agent_prepares_an_answer():
+    port = FakeConversationPort(None)
+    call = MediaCall(
+        FakeTransport(),
+        FakeSTT(),
+        FakeTTS(),
+        port,
+        settings=MediaSettings(idle_prompt_seconds=0.02, max_idle_prompts=2),
+    )
+    call.state = CallState.ACTIVE
+    # The caller just spoke; the slow model reply is still in flight.
+    call._awaiting_since = time.monotonic()
+    task = asyncio.create_task(call._idle_prompts())
+    await asyncio.sleep(0.15)
+    assert port.utterances == []  # no "are you there?" while answering
+    call.state = CallState.DRAINING
+    await asyncio.wait_for(task, 1)
 
 
 @pytest.mark.asyncio

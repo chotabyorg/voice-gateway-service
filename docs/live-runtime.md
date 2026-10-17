@@ -66,7 +66,10 @@ STT: `STT_PROVIDER=speechkit`, `STT_MODEL=general`, `STT_LANGUAGE=ru`,
 streaming after minimum local speech confirmation, including bounded preroll.
 The existing local 500 ms endpoint sends EOU; partials never enter Conversation.
 One TLS channel is reused per call, with at most four pending utterances and
-100 queued 20 ms frames per RPC. RPC failures, queue overflow or missing final
+1600 queued 20 ms frames per RPC (a full 30 s utterance plus margin, so
+continuous speech survives a transiently slow stream; a stuck RPC still
+fails through its own timeouts and emits `stt_audio_backlog` with the
+observed depth). RPC failures, queue overflow or missing final
 completion fail explicitly; there are no provider retries or silent fallback.
 Hangup cancels work without flushing unfinished speech. `stt_request_timing`
 measures waiting after the confirmed endpoint, not total RPC time.

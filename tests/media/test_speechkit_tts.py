@@ -85,6 +85,22 @@ async def test_livetts_stream_pcm_currency_and_reuses_tls_channel(provider):
         await tts.synthesize("Closed")
 
 
+async def test_prewarm_connects_once_before_first_answer(provider):
+    fake, connect, channels = provider
+    tts = SpeechKitTTS(SpeechKitTTSSettings("fixture"), connection_factory=connect)
+    try:
+        tts.prewarm()
+        tts.prewarm()
+        await asyncio.wait_for(tts._warming, 1)
+        assert channels[0].get_state() == grpc.ChannelConnectivity.READY
+        assert await tts.synthesize("Test") == b"\x01\x00\x02\x00"
+        assert len(channels) == 1 and len(fake.requests) == 1
+    finally:
+        await tts.close()
+    tts.prewarm()
+    assert len(channels) == 1
+
+
 async def test_first_pcm_precedes_completion_and_barge_in_cancels_rpc(provider):
     fake, connect, _ = provider
     fake.block = True

@@ -272,3 +272,52 @@ async def test_speechkit_explicit_activation_uses_telephone_pcm_without_ffmpeg(m
     ]:
         with pytest.raises(ValidationError):
             config(**{**settings, **changes})
+
+
+async def test_latency_knobs_are_explicit_and_bounded(monkeypatch):
+    monkeypatch.setattr("voice_gateway.live.shutil.which", lambda name: "test-ffmpeg")
+    runtime = build_live_runtime(
+        Settings(mode="live_audiosocket"), config(vad_silence_ms=300, conversation_poll_ms=50)
+    )
+    try:
+        assert runtime.stt_factory().vad.settings.silence_end_ms == 300
+        assert runtime.conversation_port.poll_seconds == 0.05
+        assert runtime.turn_silence_seconds == 0.3
+    finally:
+        await runtime.stop()
+    for changes in [
+        {"vad_silence_ms": 100},
+        {"vad_silence_ms": 2000},
+        {"conversation_poll_ms": 10},
+    ]:
+        with pytest.raises(ValidationError):
+            config(**changes)
+
+
+async def test_greeting_strip_is_opt_in_and_wraps_adapter(monkeypatch):
+    from voice_gateway.media.providers.greeting import GreetingStripTTS
+    from voice_gateway.media.providers.speechkit import SpeechKitTTS
+
+    monkeypatch.setattr("voice_gateway.live.shutil.which", lambda name: None)
+    settings = dict(
+        stt_provider="speechkit",
+        stt_model="general",
+        tts_provider="speechkit",
+        tts_model="livetts",
+        tts_voice="sofia",
+        tts_format="pcm",
+    )
+    bare = build_live_runtime(Settings(mode="live_audiosocket"), config(**settings))
+    try:
+        assert isinstance(bare.tts_factory(), SpeechKitTTS)
+    finally:
+        await bare.stop()
+    wrapped = build_live_runtime(
+        Settings(mode="live_audiosocket"), config(**settings, tts_strip_greeting=True)
+    )
+    try:
+        adapter = wrapped.tts_factory()
+        assert isinstance(adapter, GreetingStripTTS)
+        assert isinstance(adapter._inner, SpeechKitTTS)
+    finally:
+        await wrapped.stop()

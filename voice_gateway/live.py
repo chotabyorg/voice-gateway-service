@@ -47,6 +47,8 @@ class LiveSettings(BaseSettings):
     stt_language: Literal["", "ru", "en", "be"] = "ru"
     stt_early_start_ms: int = Field(default=0, ge=0, lt=500)
     vad: Literal["energy", "webrtc", "ten"] = "energy"
+    vad_silence_ms: int = Field(default=500, ge=200, le=1500)
+    conversation_poll_ms: int = Field(default=100, ge=50, le=1000)
     tts_provider: Literal["edge", "openrouter", "speechkit"]
     tts_api_key: SecretStr = SecretStr("")
     tts_model: str = Field(default="", max_length=200)
@@ -55,6 +57,7 @@ class LiveSettings(BaseSettings):
     tts_format: Literal["mp3", "pcm"] = "mp3"
     tts_expand_byn: bool = False
     tts_native_pcm_resampler: bool = False
+    tts_strip_greeting: bool = False
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -168,7 +171,11 @@ def build_live_runtime(settings, config=None):
         classifier_factory = TenSpeech
 
     queue = BatchSTTSettings(max_pending=4, early_start_ms=config.stt_early_start_ms)
-    vad = VADSettings(max_utterance_ms=30000, min_speech_ms=120 if classifier_factory else 80)
+    vad = VADSettings(
+        silence_end_ms=config.vad_silence_ms,
+        max_utterance_ms=30000,
+        min_speech_ms=120 if classifier_factory else 80,
+    )
     if config.stt_provider == "speechkit":
         from voice_gateway.media.providers.speechkit import SpeechKitSettings, SpeechKitSTT
 
@@ -213,11 +220,20 @@ def build_live_runtime(settings, config=None):
                 speech_classifier=classifier_factory() if classifier_factory else None,
             )
 
+    # Optional greeting suppression for lines whose opening is covered by a
+    # PBX announcement. Disabled by default: factories return bare adapters.
+    from voice_gateway.media.providers.greeting import GreetingStripTTS
+
+    def _voiced(inner):
+        if not config.tts_strip_greeting:
+            return inner
+        return GreetingStripTTS(inner)
+
     if config.tts_provider == "edge":
         tts_config = EdgeTTSSettings(voice=config.tts_voice)
 
         def tts_factory():
-            return EdgeTTS(tts_config)
+            return _voiced(EdgeTTS(tts_config))
     elif config.tts_provider == "speechkit":
         from voice_gateway.media.providers.speechkit import SpeechKitTTS, SpeechKitTTSSettings
 
@@ -230,7 +246,7 @@ def build_live_runtime(settings, config=None):
         )
 
         def tts_factory():
-            return SpeechKitTTS(tts_config)
+            return _voiced(SpeechKitTTS(tts_config))
     else:
         tts_config = OpenRouterTTSSettings(
             api_key=config.tts_api_key.get_secret_value(),
@@ -242,7 +258,7 @@ def build_live_runtime(settings, config=None):
         )
 
         def tts_factory():
-            return OpenRouterTTS(tts_config)
+            return _voiced(OpenRouterTTS(tts_config))
 
     routes = ControlPlaneRoutes(
         config.control_plane_url,
@@ -253,7 +269,10 @@ def build_live_runtime(settings, config=None):
     )
     registry = TrustedCallRegistry(routes)
     conversation = ConversationHTTPPort(
-        config.conversation_url, config.conversation_token, registry
+        config.conversation_url,
+        config.conversation_token,
+        registry,
+        poll_seconds=config.conversation_poll_ms / 1000,
     )
     runtime = LiveRuntime(
         settings,
@@ -261,6 +280,7 @@ def build_live_runtime(settings, config=None):
         stt_factory=stt_factory,
         tts_factory=tts_factory,
         speech_classifier_factory=classifier_factory,
+        turn_silence_seconds=config.vad_silence_ms / 1000,
     )
     runtime.registry = registry
     runtime.pbx_token = config.pbx_token

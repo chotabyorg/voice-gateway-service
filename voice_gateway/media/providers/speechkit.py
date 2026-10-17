@@ -25,7 +25,10 @@ class SpeechKitSettings:
     model: str = "general"
     final_timeout: float = 5
     max_pending: int = 4
-    max_audio_queue_frames: int = 100
+    # Queued 20 ms frames per utterance. Sized beyond a full 30 s utterance so
+    # continuous speech never fails on a transiently slow stream; a genuinely
+    # stuck RPC still fails through its own timeouts with a proper error event.
+    max_audio_queue_frames: int = 1600
     max_final_chars: int = 8000
     shutdown_timeout: float = 2
 
@@ -37,7 +40,7 @@ class SpeechKitSettings:
             or self.model != "general"
             or not 0 < self.final_timeout <= 15
             or not 1 <= self.max_pending <= 8
-            or not 32 <= self.max_audio_queue_frames <= 200
+            or not 32 <= self.max_audio_queue_frames <= 4096
             or not 1 <= self.max_final_chars <= 8000
             or not 0 < self.shutdown_timeout <= 5
         ):
@@ -122,6 +125,11 @@ class SpeechKitSTT(BaseSTT):
         try:
             utterance.audio.put_nowait(chunk)
         except asyncio.QueueFull:
+            self.emit(
+                "stt_audio_backlog",
+                frames=utterance.audio.qsize(),
+                limit=self.settings.max_audio_queue_frames,
+            )
             raise RuntimeError("SpeechKit audio backlog exceeded") from None
 
     async def feed_audio(self, chunk):
@@ -417,6 +425,17 @@ class SpeechKitTTS(BaseTTS):
         self._channel = self._stub = None
         self._rpcs = set()
         self._closed = False
+        self._warming = None
+
+    def prewarm(self):
+        # Open TLS/HTTP2 before the first answer; a failure only loses the head start.
+        if self._closed or self._channel is not None:
+            return
+        self._channel, self._stub = self.connection_factory()
+        ready = getattr(self._channel, "channel_ready", None)
+        if ready is not None:
+            self._warming = asyncio.create_task(asyncio.wait_for(ready(), 5))
+            self._warming.add_done_callback(observe_task)
 
     async def synthesize(self, text):
         chunks = bytearray()
@@ -520,6 +539,9 @@ class SpeechKitTTS(BaseTTS):
 
     async def close(self):
         self._closed = True
+        if self._warming is not None:
+            self._warming.cancel()
+            await asyncio.gather(self._warming, return_exceptions=True)
         for rpc in tuple(self._rpcs):
             rpc.cancel()
         channel, self._channel = self._channel, None

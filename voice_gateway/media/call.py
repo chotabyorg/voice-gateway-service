@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 IDLE_MARKER = "[silence]"
 
+# How long an admitted caller utterance may keep the agent "thinking" before the
+# idle machinery is allowed to nudge or end the call again. A slow model reply is
+# still an answer in progress, not silence.
+RESPONSE_PENDING_SECONDS = 30.0
+
 
 class CallState(str, Enum):
     CREATED = "created"
@@ -153,6 +158,10 @@ class MediaCall:
         self._idle_task = None
         self._idle_nudges = 0
         self._last_prompt_at = 0.0
+        # When the caller's latest utterance was admitted and no answer has been
+        # spoken yet: the agent is still preparing a reply, so the caller must
+        # not be nudged or hung up on.
+        self._awaiting_since: float | None = None
 
     def emit(self, event, **values):
         logger.info(event, extra={"event": event, **values})
@@ -311,6 +320,8 @@ class MediaCall:
             return
         # Remember whether the caller is closing; a later non-farewell clears it.
         self._caller_farewell = is_farewell(text)
+        self._last_prompt_at = time.monotonic()
+        self._awaiting_since = time.monotonic()
         self._sequence += 1
         event = FinalUtterance(
             call_id=self._call_id(),
@@ -385,6 +396,8 @@ class MediaCall:
             if self._clear_output_task is not None and not self._clear_output_task.done():
                 raise RuntimeError("Previous transport output is still clearing")
             text = text.strip()
+            # A reply arrived: the agent is no longer preparing an answer.
+            self._awaiting_since = None
             output = _Output(request_id, speech_ended_at=speech_ended_at)
             if not text:
                 await self._playback_fact(output, PlaybackState.NOT_STARTED, "empty_text")
@@ -487,13 +500,12 @@ class MediaCall:
             await asyncio.sleep(1.0)
             if self.state != CallState.ACTIVE:
                 return
-            if self._output is not None:
+            if self._output is not None or self._awaiting_answer():
                 continue
             last = max(self.utterances.last_speech, self._last_prompt_at)
             if time.monotonic() - last < self.settings.idle_prompt_seconds:
                 continue
             self._idle_nudges += 1
-            self._last_prompt_at = time.monotonic()
             await self._deliver_utterance(IDLE_MARKER)
         # Hard silence: the caller never answered the nudges, so the agent ends
         # the call itself instead of leaving the line open forever.
@@ -501,7 +513,7 @@ class MediaCall:
             await asyncio.sleep(0.5)
             if self.state != CallState.ACTIVE:
                 return
-            if self._output is not None:
+            if self._output is not None or self._awaiting_answer():
                 continue
             last = max(self.utterances.last_speech, self._last_prompt_at)
             if time.monotonic() - last < self.settings.idle_prompt_seconds:
@@ -509,6 +521,13 @@ class MediaCall:
             self.emit("voice_idle_hangup")
             self._end_call.set()
             return
+
+    def _awaiting_answer(self) -> bool:
+        """True while the agent is still preparing a reply to the caller."""
+        return (
+            self._awaiting_since is not None
+            and time.monotonic() - self._awaiting_since < RESPONSE_PENDING_SECONDS
+        )
 
     async def _interrupted_fact(self, output):
         if output.writing:

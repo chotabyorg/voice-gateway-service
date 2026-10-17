@@ -59,6 +59,8 @@ class LiveSettings(BaseSettings):
     tts_native_pcm_resampler: bool = False
     tts_strip_greeting: bool = False
     send_caller_number: bool = False
+    idle_prompt_seconds: float = Field(default=0.0, ge=0, le=60)
+    max_idle_prompts: int = Field(default=2, ge=0, le=5)
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -283,6 +285,8 @@ def build_live_runtime(settings, config=None):
         tts_factory=tts_factory,
         speech_classifier_factory=classifier_factory,
         turn_silence_seconds=config.vad_silence_ms / 1000,
+        idle_prompt_seconds=config.idle_prompt_seconds,
+        max_idle_prompts=config.max_idle_prompts,
     )
     runtime.registry = registry
     runtime.pbx_token = config.pbx_token

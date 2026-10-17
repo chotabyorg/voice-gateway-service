@@ -281,6 +281,10 @@ class MediaCall:
             async for speech in responses:
                 if self.state != CallState.ACTIVE:
                     return
+                # A partial sentence means the same turn is still being written.
+                self._awaiting_since = (
+                    time.monotonic() if getattr(speech, "is_partial", False) else None
+                )
                 await self.speak(speech.request_id, speech.text)
 
     async def _stop_conversation_tasks(self):
@@ -340,6 +344,9 @@ class MediaCall:
             )
             return
         if authorized_speech is not None:
+            self._awaiting_since = (
+                time.monotonic() if getattr(authorized_speech, "is_partial", False) else None
+            )
             try:
                 await self.speak(
                     authorized_speech.request_id,
@@ -396,8 +403,6 @@ class MediaCall:
             if self._clear_output_task is not None and not self._clear_output_task.done():
                 raise RuntimeError("Previous transport output is still clearing")
             text = text.strip()
-            # A reply arrived: the agent is no longer preparing an answer.
-            self._awaiting_since = None
             output = _Output(request_id, speech_ended_at=speech_ended_at)
             if not text:
                 await self._playback_fact(output, PlaybackState.NOT_STARTED, "empty_text")

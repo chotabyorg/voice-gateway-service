@@ -45,6 +45,8 @@ class AuthorizedSpeech:
 
     request_id: str
     text: str
+    # A partial (leased) sentence: the agent is still working on the same turn.
+    is_partial: bool = False
 
 
 @dataclass(frozen=True)

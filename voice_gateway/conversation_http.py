@@ -81,6 +81,7 @@ class _Permission(_Identity):
     send: StrictBool
     text: str | None = Field(default=None, min_length=1, max_length=16384)
     replayed: StrictBool
+    is_partial: StrictBool = False
 
 
 class _Fact(_Identity):
@@ -298,7 +299,11 @@ class ConversationHTTPPort(StreamingConversationPort):
                     session.failed.set()
                     raise ConversationBoundaryError()
                 session.response_id, session.event_sequence = permission.response_id, 0
-                yield AuthorizedSpeech(str(permission.response_id), permission.text)
+                yield AuthorizedSpeech(
+                    str(permission.response_id),
+                    permission.text,
+                    is_partial=bool(permission.is_partial),
+                )
         raise ConversationBoundaryError()
 
     async def playback_fact(self, event: PlaybackFact) -> None:

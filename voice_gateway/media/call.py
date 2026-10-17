@@ -26,6 +26,8 @@ from .utterances import UtteranceCoordinator
 
 logger = logging.getLogger(__name__)
 
+IDLE_MARKER = "[silence]"
+
 
 class CallState(str, Enum):
     CREATED = "created"
@@ -54,6 +56,8 @@ class MediaSettings:
     smooth_barge_in: bool = True
     hangup_on_farewell: bool = True
     farewell_grace_seconds: float = 0.8
+    idle_prompt_seconds: float = 0.0
+    max_idle_prompts: int = 2
 
     def __post_init__(self):
         if (
@@ -70,6 +74,8 @@ class MediaSettings:
             or self.max_playback_bytes < 2
             or self.interrupt_timeout <= 0
             or not 0 <= self.farewell_grace_seconds <= 10
+            or self.idle_prompt_seconds < 0
+            or self.max_idle_prompts < 0
         ):
             raise ValueError("Invalid media call settings")
 
@@ -143,6 +149,9 @@ class MediaCall:
         self._end_call_task = None
         self._caller_farewell = False
         self._last_opening = None
+        self._idle_task = None
+        self._idle_nudges = 0
+        self._last_prompt_at = 0.0
 
     def emit(self, event, **values):
         logger.info(event, extra={"event": event, **values})
@@ -194,6 +203,10 @@ class MediaCall:
                 self._end_call_task = asyncio.create_task(
                     self._end_call.wait(), name="voice-end-call"
                 )
+                if self.settings.idle_prompt_seconds > 0 and self.settings.max_idle_prompts > 0:
+                    self._idle_task = asyncio.create_task(
+                        self._idle_prompts(), name="voice-idle-prompt"
+                    )
                 while True:
                     try:
                         audio = await self._read_audio()
@@ -262,7 +275,8 @@ class MediaCall:
 
     async def _stop_conversation_tasks(self):
         tasks = [
-            task for task in (self._response_task, self._boundary_failure_task, self._end_call_task)
+            task for task in (self._response_task, self._boundary_failure_task,
+                              self._end_call_task, self._idle_task)
             if task is not None
         ]
         for task in tasks:
@@ -384,6 +398,7 @@ class MediaCall:
             self.detector.echo_rms = 0
             self._output_started = output.started_at
             self._output = output
+            self._last_prompt_at = time.monotonic()
             task = asyncio.create_task(self._produce(output, text), name="voice-playback")
             self._output_task = task
             revoked = asyncio.create_task(output.revoked.wait())
@@ -443,6 +458,25 @@ class MediaCall:
         await asyncio.sleep(self.settings.farewell_grace_seconds)
         if self.state == CallState.ACTIVE:
             self._end_call.set()
+
+    async def _idle_prompts(self):
+        """Ask once or twice when the caller has gone quiet.
+
+        The prompt is a synthetic admission, so the reply is authored by
+        Conversation like any other turn; the gateway itself never invents speech.
+        """
+        while self.state == CallState.ACTIVE and self._idle_nudges < self.settings.max_idle_prompts:
+            await asyncio.sleep(1.0)
+            if self.state != CallState.ACTIVE:
+                return
+            if self._output is not None:
+                continue
+            last = max(self.utterances.last_speech, self._last_prompt_at)
+            if time.monotonic() - last < self.settings.idle_prompt_seconds:
+                continue
+            self._idle_nudges += 1
+            self._last_prompt_at = time.monotonic()
+            await self._deliver_utterance(IDLE_MARKER)
 
     async def _interrupted_fact(self, output):
         if output.writing:

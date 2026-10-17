@@ -325,7 +325,9 @@ class MediaCall:
         # Remember whether the caller is closing; a later non-farewell clears it.
         self._caller_farewell = is_farewell(text)
         self._last_prompt_at = time.monotonic()
-        self._awaiting_since = time.monotonic()
+        # Only a caller utterance means the agent owes an answer; the synthetic
+        # idle marker is awaited inline by _idle_prompts itself.
+        self._awaiting_since = None if text == IDLE_MARKER else time.monotonic()
         self._sequence += 1
         event = FinalUtterance(
             call_id=self._call_id(),
@@ -337,24 +339,29 @@ class MediaCall:
         try:
             authorized_speech = await self.conversation_port.final_utterance(event)
         except Exception as exc:
+            # Nothing is pending: do not defer idle nudges for a failed turn.
+            self._awaiting_since = None
             self.emit(
                 "conversation_port_error",
                 operation="final_utterance",
                 error_type=type(exc).__name__,
             )
             return
-        if authorized_speech is not None:
-            self._awaiting_since = (
-                time.monotonic() if getattr(authorized_speech, "is_partial", False) else None
+        if authorized_speech is None:
+            self._awaiting_since = None
+            return
+        self._awaiting_since = (
+            time.monotonic() if getattr(authorized_speech, "is_partial", False) else None
+        )
+        try:
+            await self.speak(
+                authorized_speech.request_id,
+                authorized_speech.text,
+                speech_ended_at=self.utterances.dispatched_speech_at,
             )
-            try:
-                await self.speak(
-                    authorized_speech.request_id,
-                    authorized_speech.text,
-                    speech_ended_at=self.utterances.dispatched_speech_at,
-                )
-            except Exception as exc:
-                self.emit("media_speech_error", error_type=type(exc).__name__)
+        except Exception as exc:
+            self._awaiting_since = None
+            self.emit("media_speech_error", error_type=type(exc).__name__)
 
     async def feed_audio(self, audio):
         validate_pcm(audio)

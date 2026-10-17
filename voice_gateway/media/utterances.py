@@ -6,9 +6,38 @@ It does not schedule or own Main Chota AgentTurns.
 
 import asyncio
 import logging
+import re
 import time
 
 from .observability import emit_event
+
+
+_NUMBER_WORDS = frozenset(
+    """
+ноль один два три четыре пять шесть семь восемь девять десять одиннадцать
+двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать
+восемнадцать девятнадцать двадцать тридцать сорок пятьдесят шестьдесят
+семьдесят восемьдесят девяносто сто двести триста четыреста пятьсот шестьсот
+семьсот восемьсот девятьсот тысяча плюс минус код номер телефон добавочный
+zero one two three four five six seven eight nine ten plus minus code number
+""".split()
+)
+_NON_NUMERIC = re.compile(r"[^0-9a-zа-яёіў]+")
+
+
+def numeric_dictation(text):
+    """True when the final looks like a dictated phone number or its fragment.
+
+    VAD/STT cut a spoken number into short, digit-heavy finals; those must not be
+    answered as a finished request.
+    """
+    if not text or len(text) > 80:
+        return False
+    tokens = [token for token in _NON_NUMERIC.split(text.casefold()) if token]
+    if not tokens or len(tokens) > 12:
+        return False
+    numeric = sum(1 for token in tokens if token.isdigit() or token in _NUMBER_WORDS)
+    return numeric >= 1 and numeric * 4 >= len(tokens) * 3
 
 
 def likely_unfinished(text):
@@ -44,7 +73,7 @@ def likely_unfinished(text):
         " я хачу",
         " пачакайце",
     )
-    return any((" " + text).endswith(tail) for tail in tails)
+    return any((" " + text).endswith(tail) for tail in tails) or numeric_dictation(text)
 
 
 class UtteranceCoordinator:
@@ -54,12 +83,15 @@ class UtteranceCoordinator:
         *,
         silence_seconds=0.5,
         continuation_seconds=0.9,
+        numeric_continuation_seconds=2.5,
         max_pending=8,
         max_pending_chars=16000,
         emit=None,
     ):
         if max_pending < 1 or max_pending_chars < 1:
             raise ValueError("Invalid acoustic final buffer limits")
+        if numeric_continuation_seconds < continuation_seconds:
+            raise ValueError("Numeric continuation must not shorten the window")
         self.callback = callback
         self.max_pending = max_pending
         self.max_pending_chars = max_pending_chars
@@ -68,6 +100,7 @@ class UtteranceCoordinator:
         self.emit = lambda event, **values: emit_event(event, observer=emit, **values)
         self.silence_seconds = silence_seconds
         self.continuation_seconds = continuation_seconds
+        self.numeric_continuation_seconds = numeric_continuation_seconds
         self.last_speech = 0.0
         self.pending = []
         self.deadline = 0.0
@@ -103,9 +136,13 @@ class UtteranceCoordinator:
         self.pending_chars += len(text) + bool(self.pending)
         self.pending.append(text)
         self.pending_speech_at = speech_ended_at
-        self.deadline = time.monotonic() + (
-            self.continuation_seconds if likely_unfinished(text) else 0
-        )
+        if numeric_dictation(text):
+            window = self.numeric_continuation_seconds
+        elif likely_unfinished(text):
+            window = self.continuation_seconds
+        else:
+            window = 0
+        self.deadline = time.monotonic() + window
         self.changed.set()
         if self.task is None or self.task.done():
             self.task = asyncio.create_task(self._run(), name="caller-turn-coordinator")

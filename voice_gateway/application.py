@@ -70,9 +70,13 @@ class VoiceGatewayRuntime:
         tts_factory=None,
         speech_classifier_factory=None,
         turn_silence_seconds=0.5,
+        idle_prompt_seconds=0.0,
+        max_idle_prompts=2,
     ):
         self.settings = settings
         self.turn_silence_seconds = turn_silence_seconds
+        self.idle_prompt_seconds = idle_prompt_seconds
+        self.max_idle_prompts = max_idle_prompts
         if settings.mode in {"live_audiosocket", "live_sip"} and any(
             value is None for value in (conversation_port, stt_factory, tts_factory)
         ):
@@ -222,6 +226,8 @@ class VoiceGatewayRuntime:
                 settings=MediaSettings(
                     max_call_seconds=self.settings.max_call_seconds,
                     turn_silence_seconds=self.turn_silence_seconds,
+                    idle_prompt_seconds=self.idle_prompt_seconds,
+                    max_idle_prompts=self.max_idle_prompts,
                 ),
                 interruption_classifier=(
                     self.speech_classifier_factory() if self.speech_classifier_factory else None

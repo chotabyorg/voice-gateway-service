@@ -127,6 +127,16 @@ def caller_number(received) -> str:
     return preferred or fallback
 
 
+def caller_ani(received, called_number: str) -> str:
+    """Caller ANI from the validated INVITE, never the dialed DID.
+
+    Some PBX trunks present the called DID in From/P-Asserted-Identity; a caller
+    cannot ring their own number, so that value is not a caller identity.
+    """
+    ani = caller_number(received)
+    return "" if ani == called_number else ani
+
+
 class PCMBuffer:
     def __init__(self):
         self.lock = threading.Lock()
@@ -490,7 +500,7 @@ class SIPClient:
                 if len(self.calls) <= limit:
                     number = called_did(self.settings, received)
                     transport = SIPTransport(self, call)
-                    transport.caller_number = caller_number(received)
+                    transport.caller_number = caller_ani(received, number)
                     transport.queued = queued and not self.capacity()
                     self.registry.register(Registration(call_id=transport.call_id, number=number))
                     call.transport = transport

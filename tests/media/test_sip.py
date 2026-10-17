@@ -47,6 +47,22 @@ async def until(predicate):
             await asyncio.sleep(0.005)
 
 
+def test_dialed_did_is_never_used_as_the_caller_number():
+    from voice_gateway.sip import caller_ani, caller_number
+
+    # A trunk that presents the called DID in From must not poison the ANI.
+    trunk = NS(
+        srcAddress="192.0.2.1:5060",
+        wholeMsg=(
+            "INVITE sip:+375170000000@pbx.invalid SIP/2.0\r\n"
+            "From: <sip:+375170000000@pbx.invalid>\r\n\r\n"
+        ),
+    )
+    assert caller_number(trunk) == "+375170000000"
+    assert caller_ani(trunk, "+375170000000") == ""
+    assert caller_ani(received(), "+375170000000") == "+375170000099"
+
+
 class QueuedTransport:
     """Minimal held call used to exercise the busy queue without native SIP."""
 

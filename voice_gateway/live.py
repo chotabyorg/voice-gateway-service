@@ -145,10 +145,14 @@ class LiveRuntime(VoiceGatewayRuntime):
         if not audio:
             return
         await transport.prepare()
-        # Write in ~1s frames: each transport write is bounded by its own timeout.
-        for offset in range(0, len(audio), 16000):
-            await transport.write_audio_chunk(audio[offset : offset + 16000])
-        await asyncio.sleep(min(1.0, len(audio) / 16000))
+        # Write and drain in short frames: the transport write paces itself, and
+        # the bounded native input buffer fails the call if it is never read.
+        drain = getattr(transport, "drain_audio", None)
+        for offset in range(0, len(audio), 4000):
+            await transport.write_audio_chunk(audio[offset : offset + 4000])
+            if drain is not None and not await drain():
+                return
+        await asyncio.sleep(min(0.5, len(audio) / 16000))
 
     async def stop(self):
         try:

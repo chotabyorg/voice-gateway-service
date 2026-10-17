@@ -7,7 +7,13 @@ import pytest
 
 from tests.media.media_fakes import FakeConversationPort, FakeSTT, FakeTTS, FakeTransport
 from voice_gateway.events import AuthorizedSpeech
-from voice_gateway.media.call import IDLE_MARKER, CallState, MediaCall, MediaSettings
+from voice_gateway.media.call import (
+    HANGUP_MARKER,
+    IDLE_MARKER,
+    CallState,
+    MediaCall,
+    MediaSettings,
+)
 
 
 @pytest.mark.asyncio
@@ -22,7 +28,7 @@ async def test_idle_prompt_admits_one_synthetic_turn():
     )
     call.state = CallState.ACTIVE
     await call._idle_prompts()
-    assert [event.text for event in port.utterances] == [IDLE_MARKER]
+    assert [event.text for event in port.utterances][0] == IDLE_MARKER
     assert call._idle_nudges == 1
 
 
@@ -33,17 +39,18 @@ def test_idle_prompt_is_off_by_default():
 
 
 @pytest.mark.asyncio
-async def test_hard_silence_ends_the_call_after_the_last_nudge():
+async def test_hard_silence_says_goodbye_then_ends_the_call():
+    port = FakeConversationPort()
     call = MediaCall(
         FakeTransport(),
         FakeSTT(),
         FakeTTS(),
-        FakeConversationPort(),
+        port,
         settings=MediaSettings(idle_prompt_seconds=0.05, max_idle_prompts=1),
     )
     call.state = CallState.ACTIVE
     await call._idle_prompts()
-    assert call._idle_nudges == 1
+    assert [event.text for event in port.utterances] == [IDLE_MARKER, HANGUP_MARKER]
     assert call._end_call.is_set()
 
 

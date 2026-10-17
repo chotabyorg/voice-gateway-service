@@ -28,6 +28,10 @@ from .utterances import UtteranceCoordinator
 logger = logging.getLogger(__name__)
 
 IDLE_MARKER = "[silence]"
+# Delivered only when the call is about to end on hard silence, so the agent can
+# close the conversation in words instead of the line going dead.
+HANGUP_MARKER = "[silence-final]"
+HANGUP_FAREWELL_SECONDS = 8.0
 
 # How long an admitted caller utterance may keep the agent "thinking" before the
 # idle machinery is allowed to nudge or end the call again. A slow model reply is
@@ -536,6 +540,13 @@ class MediaCall:
             if time.monotonic() - last < self.settings.idle_prompt_seconds:
                 continue
             self.emit("voice_idle_hangup")
+            # Give the agent a chance to say a short goodbye before the line closes.
+            await self._deliver_utterance(HANGUP_MARKER)
+            deadline = time.monotonic() + HANGUP_FAREWELL_SECONDS
+            while time.monotonic() < deadline and self.state == CallState.ACTIVE:
+                if self._output is None and not self._awaiting_answer():
+                    break
+                await asyncio.sleep(0.2)
             self._end_call.set()
             return
 

@@ -462,6 +462,9 @@ class MediaCall:
                     observe_task(task)
                 self._output_task = self._output = None
                 self.detector.reset()
+                # The idle clock starts when the agent *stops* speaking, so a
+                # short answer is not followed by a nudge a moment later.
+                self._last_prompt_at = time.monotonic()
                 self._suppress_until = time.monotonic() + (
                     0
                     if output.reason or not output.accepted

@@ -320,6 +320,8 @@ class MediaCall:
             )
 
     async def _deliver_utterance(self, text):
+        """Forward a finalized caller utterance, tracking the pending-answer window
+        via `_awaiting_since`, and speak any authorized speech that comes back."""
         if self.state != CallState.ACTIVE:
             return
         # Remember whether the caller is closing; a later non-farewell clears it.
@@ -369,6 +371,8 @@ class MediaCall:
             self._awaiting_since = None
 
     async def feed_audio(self, audio):
+        """Route inbound caller audio to barge-in detection, activity-based
+        end-of-speech tracking, or the STT provider, as the current state requires."""
         validate_pcm(audio)
         if self._output is not None and not self._output.revoked.is_set():
             self._activity_pending = b""

@@ -20,6 +20,13 @@ _GREETING = re.compile(
     re.IGNORECASE,
 )
 
+# A stock self-introduction ("Вы обратились в Салон красоты ...") that the PBX
+# acknowledgment already covers.
+_INTRO = re.compile(
+    r"^\s*(вы\s+обратились\s+в|это\s+салон|вас\s+приветствует)[^.!?…]*[.!?…]\s*",
+    re.IGNORECASE,
+)
+
 _OFFER = re.compile(
     r"(чем (я )?могу (вам )?помочь"
     r"|могу (я |ли )?(вам )?помочь"
@@ -35,10 +42,11 @@ _OFFER = re.compile(
 
 
 def strip_leading_greeting(text: str) -> str:
-    """Remove one leading greeting formula; never return empty."""
+    """Remove one leading greeting and one stock self-introduction; never empty."""
     if not isinstance(text, str):
         raise ValueError("Invalid speech text")
     stripped = _GREETING.sub("", text, count=1).lstrip()
+    stripped = _INTRO.sub("", stripped, count=1).lstrip()
     return stripped or text
 
 

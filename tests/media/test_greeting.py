@@ -5,6 +5,7 @@ import pytest
 from tests.media.media_fakes import FakeTTS, pcm
 from voice_gateway.media.providers.greeting import (
     GreetingStripTTS,
+    has_meaningful_speech,
     strip_leading_greeting,
     strip_stock_formulas,
     strip_trailing_offer,
@@ -109,3 +110,23 @@ async def test_close_reaches_inner_adapter():
     tts = GreetingStripTTS(FakeTTS())
     await tts.close()
     assert tts._inner.closed is True
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Здравствуйте! Вы обратились в Салон красоты \"У Светланы\".", False),
+        ("Здравствуйте!", False),
+        ("Вы обратились в салон.", False),
+        ("Здравствуйте! Чем можем вам помочь?", True),
+        ("Чем можем вам помочь?", True),
+        ("Запись на завтра.", True),
+    ],
+)
+def test_stock_only_segments_carry_no_meaningful_speech(text, expected):
+    assert has_meaningful_speech(text) is expected
+
+
+def test_meaningful_speech_rejects_non_text():
+    with pytest.raises(ValueError):
+        has_meaningful_speech(None)

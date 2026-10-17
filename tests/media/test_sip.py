@@ -47,6 +47,71 @@ async def until(predicate):
             await asyncio.sleep(0.005)
 
 
+class QueuedTransport:
+    """Minimal held call used to exercise the busy queue without native SIP."""
+
+    def __init__(self):
+        self.drained = 0
+        self.prepared = 0
+
+    async def drain_audio(self):
+        self.drained += 1
+        return True
+
+    async def prepare(self):
+        self.prepared += 1
+
+    async def close(self):
+        pass
+
+
+async def test_busy_call_is_announced_then_admitted_when_a_slot_frees():
+    from voice_gateway.sip import BUSY_MESSAGE
+
+    announcements, admitted = [], []
+    free = {"slot": False}
+
+    async def handle(transport):
+        admitted.append(transport)
+
+    async def announce(transport, text):
+        announcements.append(text)
+
+    client = SIPClient(
+        settings(max_calls=1), handle, Registry(), None,
+        capacity=lambda: free["slot"], announce=announce,
+    )
+    transport = QueuedTransport()
+    task = asyncio.create_task(client._serve_queued(transport))
+    await until(lambda: announcements)
+    assert admitted == []
+    free["slot"] = True
+    await asyncio.wait_for(task, 2)
+    assert announcements == [BUSY_MESSAGE]
+    assert admitted == [transport]
+    assert transport.drained >= 1
+
+
+async def test_busy_call_times_out_with_a_closing_notice():
+    from voice_gateway.sip import BUSY_MESSAGE, BUSY_TIMEOUT_MESSAGE
+
+    announcements, admitted = [], []
+
+    async def handle(transport):
+        admitted.append(transport)
+
+    async def announce(transport, text):
+        announcements.append(text)
+
+    client = SIPClient(
+        settings(max_calls=1, busy_hold_seconds=0.3), handle, Registry(), None,
+        capacity=lambda: False, announce=announce,
+    )
+    await asyncio.wait_for(client._serve_queued(QueuedTransport()), 2)
+    assert admitted == []
+    assert announcements == [BUSY_MESSAGE, BUSY_TIMEOUT_MESSAGE]
+
+
 def test_did_is_called_number_never_caller_or_static_pilot():
     assert called_did(settings(), received()) == NUMBER
     assert called_did(settings(), received(uri="sip:375170000000@pbx.invalid")) == NUMBER

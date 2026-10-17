@@ -18,6 +18,7 @@ from voice_gateway.events import (
 from voice_gateway.media.audio import PCM, rms, validate_pcm
 from voice_gateway.media.completion import bounded_call, finish_owned_task, observe_task
 from voice_gateway.media.farewell import is_farewell, stock_opening_key
+from voice_gateway.media.providers.greeting import has_meaningful_speech
 from voice_gateway.media.interruption import InterruptionDetector, InterruptionSettings
 from voice_gateway.media.interfaces import TransportIdleTimeout
 from voice_gateway.media.playback import PlaybackControl, play_pcm_stream
@@ -391,6 +392,15 @@ class MediaCall:
             if len(text) > self.settings.max_tts_chars:
                 await self._playback_fact(output, PlaybackState.FAILED, "text_limit")
                 raise ValueError("Speech text exceeds configured limit")
+            # A segment that is only a greeting/stock intro carries no content:
+            # the telephone station already greeted the caller, so speaking it
+            # would greet a second time (often the whole reply when the caller
+            # says hello first).
+            if not has_meaningful_speech(text):
+                await self._playback_fact(
+                    output, PlaybackState.NOT_STARTED, "stock_opening_only"
+                )
+                return False
             # A repeated greeting/stock intro is never spoken twice in one call,
             # even when streaming delivers it as separate sentences.
             opening = stock_opening_key(text)
@@ -484,6 +494,20 @@ class MediaCall:
             self._idle_nudges += 1
             self._last_prompt_at = time.monotonic()
             await self._deliver_utterance(IDLE_MARKER)
+        # Hard silence: the caller never answered the nudges, so the agent ends
+        # the call itself instead of leaving the line open forever.
+        while self.state == CallState.ACTIVE:
+            await asyncio.sleep(0.5)
+            if self.state != CallState.ACTIVE:
+                return
+            if self._output is not None:
+                continue
+            last = max(self.utterances.last_speech, self._last_prompt_at)
+            if time.monotonic() - last < self.settings.idle_prompt_seconds:
+                continue
+            self.emit("voice_idle_hangup")
+            self._end_call.set()
+            return
 
     async def _interrupted_fact(self, output):
         if output.writing:

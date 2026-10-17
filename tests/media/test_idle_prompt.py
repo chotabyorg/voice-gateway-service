@@ -26,3 +26,19 @@ def test_idle_prompt_is_off_by_default():
     call = MediaCall(FakeTransport(), FakeSTT(), FakeTTS(), FakeConversationPort())
     assert call.settings.idle_prompt_seconds == 0
     assert call._idle_task is None
+
+
+@pytest.mark.asyncio
+async def test_hard_silence_ends_the_call_after_the_last_nudge():
+    port = FakeConversationPort(None)
+    call = MediaCall(
+        FakeTransport(),
+        FakeSTT(),
+        FakeTTS(),
+        port,
+        settings=MediaSettings(idle_prompt_seconds=0.05, max_idle_prompts=1),
+    )
+    call.state = CallState.ACTIVE
+    await call._idle_prompts()
+    assert call._idle_nudges == 1
+    assert call._end_call.is_set()

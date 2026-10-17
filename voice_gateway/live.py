@@ -121,9 +121,34 @@ class LiveRuntime(VoiceGatewayRuntime):
         settings = SIPSettings()
         if settings.max_calls > self.settings.max_calls:
             raise ValueError("SIP admission cannot exceed runtime capacity")
-        self.sip_client = SIPClient(settings, self.handle_transport, self.registry)
+        self.sip_client = SIPClient(
+            settings,
+            self.handle_transport,
+            self.registry,
+            capacity=lambda: len(self._sessions) < self.settings.max_calls,
+            announce=self._announce,
+        )
         self._closing = False
         await self.sip_client.start()
+
+    async def _announce(self, transport, text):
+        """Play a fixed transport announcement (a busy line) before any session.
+
+        Authorized agent speech still always comes from Conversation; this is a
+        bounded, non-conversational notice used only while a caller is held.
+        """
+        tts = self.tts_factory()
+        try:
+            audio = await tts.synthesize(text)
+        finally:
+            await tts.close()
+        if not audio:
+            return
+        await transport.prepare()
+        # Write in ~1s frames: each transport write is bounded by its own timeout.
+        for offset in range(0, len(audio), 16000):
+            await transport.write_audio_chunk(audio[offset : offset + 16000])
+        await asyncio.sleep(min(1.0, len(audio) / 16000))
 
     async def stop(self):
         try:

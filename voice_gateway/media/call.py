@@ -55,7 +55,7 @@ class MediaSettings:
     interrupt_timeout: float = 0.2
     smooth_barge_in: bool = True
     hangup_on_farewell: bool = True
-    farewell_grace_seconds: float = 0.8
+    farewell_grace_seconds: float = 0.3
     idle_prompt_seconds: float = 0.0
     max_idle_prompts: int = 2
 
@@ -148,7 +148,7 @@ class MediaCall:
         self._end_call = asyncio.Event()
         self._end_call_task = None
         self._caller_farewell = False
-        self._last_opening = None
+        self._spoken_openings: set[str] = set()
         self._idle_task = None
         self._idle_nudges = 0
         self._last_prompt_at = 0.0
@@ -391,15 +391,16 @@ class MediaCall:
             if len(text) > self.settings.max_tts_chars:
                 await self._playback_fact(output, PlaybackState.FAILED, "text_limit")
                 raise ValueError("Speech text exceeds configured limit")
-            # A repeated greeting/stock intro is never spoken twice in one call.
+            # A repeated greeting/stock intro is never spoken twice in one call,
+            # even when streaming delivers it as separate sentences.
             opening = stock_opening_key(text)
             if opening is not None:
-                if opening == self._last_opening:
+                if opening in self._spoken_openings:
                     await self._playback_fact(
                         output, PlaybackState.NOT_STARTED, "duplicate_opening"
                     )
                     return False
-                self._last_opening = opening
+                self._spoken_openings.add(opening)
             self.detector.reset()
             self.detector.echo_rms = 0
             self._output_started = output.started_at

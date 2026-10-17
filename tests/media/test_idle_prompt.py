@@ -6,6 +6,7 @@ import time
 import pytest
 
 from tests.media.media_fakes import FakeConversationPort, FakeSTT, FakeTTS, FakeTransport
+from voice_gateway.events import AuthorizedSpeech
 from voice_gateway.media.call import IDLE_MARKER, CallState, MediaCall, MediaSettings
 
 
@@ -64,6 +65,35 @@ async def test_caller_is_not_nudged_while_the_agent_prepares_an_answer():
     assert port.utterances == []  # no "are you there?" while answering
     call.state = CallState.DRAINING
     await asyncio.wait_for(task, 1)
+
+
+@pytest.mark.asyncio
+async def test_partial_sentence_keeps_the_agent_busy_until_the_final_one():
+    """Spoken partials ("let me check") must not look like caller silence."""
+
+    class PartialPort(FakeConversationPort):
+        async def responses(self, call_id):
+            yield AuthorizedSpeech("p1", "Сейчас проверю записи.", is_partial=True)
+
+    call = MediaCall(FakeTransport(), FakeSTT(), FakeTTS(), PartialPort(None))
+    call.state = CallState.ACTIVE
+    call._awaiting_since = None
+    await call._receive_responses()
+    assert call._awaiting_answer()  # still working on the same turn
+
+
+@pytest.mark.asyncio
+async def test_final_sentence_ends_the_busy_window():
+    class FinalPort(FakeConversationPort):
+        async def responses(self, call_id):
+            yield AuthorizedSpeech("f1", "Готово, записала.", is_partial=False)
+
+    call = MediaCall(FakeTransport(), FakeSTT(), FakeTTS(), FinalPort(None))
+    call.state = CallState.ACTIVE
+    call._awaiting_since = time.monotonic()
+    await call._receive_responses()
+    assert call._awaiting_since is None
+    assert not call._awaiting_answer()
 
 
 @pytest.mark.asyncio

@@ -12,14 +12,16 @@ import time
 from .observability import emit_event
 
 
-_NUMBER_WORDS = frozenset("""
+_NUMBER_WORDS = frozenset(
+    """
 ноль один два три четыре пять шесть семь восемь девять десять одиннадцать
 двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать
 восемнадцать девятнадцать двадцать тридцать сорок пятьдесят шестьдесят
 семьдесят восемьдесят девяносто сто двести триста четыреста пятьсот шестьсот
 семьсот восемьсот девятьсот тысяча плюс минус код номер телефон добавочный
 zero one two three four five six seven eight nine ten plus minus code number
-""".split())
+""".split()
+)
 _NON_NUMERIC = re.compile(r"[^0-9a-zа-яёіў]+")
 
 

@@ -29,21 +29,37 @@ def _invite(extra_lines):
 
 
 def test_caller_number_prefers_asserted_identity_over_from():
-    received = _invite([
-        "From: \"Client\" <sip:+375291112233@operator.example>;tag=1",
-        "P-Asserted-Identity: <sip:+375447778899@operator.example>",
-        "X-Called-Number: +375173820015",
-    ])
+    received = _invite(
+        [
+            'From: "Client" <sip:+375291112233@operator.example>;tag=1',
+            "P-Asserted-Identity: <sip:+375447778899@operator.example>",
+            "X-Called-Number: +375173820015",
+        ]
+    )
     assert caller_number(received) == "+375447778899"
 
 
 def test_caller_number_falls_back_to_from_and_rejects_non_belarusian():
-    assert caller_number(_invite([
-        "From: <sip:+375291112233@gw>;tag=1",
-    ])) == "+375291112233"
-    assert caller_number(_invite([
-        "From: <sip:+15551234567@gw>;tag=1",
-    ])) == ""
+    assert (
+        caller_number(
+            _invite(
+                [
+                    "From: <sip:+375291112233@gw>;tag=1",
+                ]
+            )
+        )
+        == "+375291112233"
+    )
+    assert (
+        caller_number(
+            _invite(
+                [
+                    "From: <sip:+15551234567@gw>;tag=1",
+                ]
+            )
+        )
+        == ""
+    )
     assert caller_number(_invite(["From: anonymous;tag=1"])) == ""
 
 
@@ -62,16 +78,23 @@ def _port(seen, *, send: bool):
         path = request.url.path.rsplit("/voice/", 1)[1]
         if path == "calls/start":
             seen.append(data)
-            return httpx.Response(200, json=dict(
-                identity, conversation_id=str(uuid4()), state="ACTIVE", replayed=False))
+            return httpx.Response(
+                200,
+                json=dict(identity, conversation_id=str(uuid4()), state="ACTIVE", replayed=False),
+            )
         if path == "calls/end":
-            return httpx.Response(200, json=dict(
-                identity, conversation_id=str(uuid4()), state="ENDED", replayed=False))
+            return httpx.Response(
+                200,
+                json=dict(identity, conversation_id=str(uuid4()), state="ENDED", replayed=False),
+            )
         raise AssertionError(path)
 
     return ConversationHTTPPort(
-        "http://conversation.test", SecretStr("a" * 32), _resolve,
-        transport=httpx.MockTransport(handle), send_caller_number=send,
+        "http://conversation.test",
+        SecretStr("a" * 32),
+        _resolve,
+        transport=httpx.MockTransport(handle),
+        send_caller_number=send,
     )
 
 

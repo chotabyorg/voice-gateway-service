@@ -275,8 +275,13 @@ class MediaCall:
 
     async def _stop_conversation_tasks(self):
         tasks = [
-            task for task in (self._response_task, self._boundary_failure_task,
-                              self._end_call_task, self._idle_task)
+            task
+            for task in (
+                self._response_task,
+                self._boundary_failure_task,
+                self._end_call_task,
+                self._idle_task,
+            )
             if task is not None
         ]
         for task in tasks:
@@ -390,8 +395,9 @@ class MediaCall:
             opening = stock_opening_key(text)
             if opening is not None:
                 if opening == self._last_opening:
-                    await self._playback_fact(output, PlaybackState.NOT_STARTED,
-                                              "duplicate_opening")
+                    await self._playback_fact(
+                        output, PlaybackState.NOT_STARTED, "duplicate_opening"
+                    )
                     return False
                 self._last_opening = opening
             self.detector.reset()

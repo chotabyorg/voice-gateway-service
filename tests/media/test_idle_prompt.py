@@ -10,7 +10,10 @@ from voice_gateway.media.call import IDLE_MARKER, CallState, MediaCall, MediaSet
 async def test_idle_prompt_admits_one_synthetic_turn():
     port = FakeConversationPort(None)
     call = MediaCall(
-        FakeTransport(), FakeSTT(), FakeTTS(), port,
+        FakeTransport(),
+        FakeSTT(),
+        FakeTTS(),
+        port,
         settings=MediaSettings(idle_prompt_seconds=0.05, max_idle_prompts=1),
     )
     call.state = CallState.ACTIVE

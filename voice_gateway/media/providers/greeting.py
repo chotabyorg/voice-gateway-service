@@ -82,5 +82,10 @@ class GreetingStripTTS:
         async for piece in stream(cleaned):
             yield piece
 
+    def prewarm(self) -> None:
+        prewarm = getattr(self._inner, "prewarm", None)
+        if prewarm is not None:
+            prewarm()
+
     async def close(self) -> None:
         await self._inner.close()

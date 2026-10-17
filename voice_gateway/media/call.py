@@ -17,6 +17,7 @@ from voice_gateway.events import (
 )
 from voice_gateway.media.audio import PCM, rms, validate_pcm
 from voice_gateway.media.completion import bounded_call, finish_owned_task, observe_task
+from voice_gateway.media.farewell import is_farewell, stock_opening_key
 from voice_gateway.media.interruption import InterruptionDetector, InterruptionSettings
 from voice_gateway.media.interfaces import TransportIdleTimeout
 from voice_gateway.media.playback import PlaybackControl, play_pcm_stream
@@ -39,6 +40,7 @@ class MediaSettings:
     speech_threshold: int = 500
     turn_silence_seconds: float = 0.5
     continuation_seconds: float = 0.9
+    numeric_continuation_seconds: float = 2.5
     post_playback_suppression_seconds: float = 0
     barge_in: bool = True
     interruption: InterruptionSettings = field(default_factory=InterruptionSettings)
@@ -50,12 +52,15 @@ class MediaSettings:
     max_playback_bytes: int = 8 * 1024 * 1024
     interrupt_timeout: float = 0.2
     smooth_barge_in: bool = True
+    hangup_on_farewell: bool = True
+    farewell_grace_seconds: float = 0.8
 
     def __post_init__(self):
         if (
             self.speech_threshold < 1
             or self.turn_silence_seconds < 0
             or self.continuation_seconds < 0
+            or self.numeric_continuation_seconds < self.continuation_seconds
             or self.post_playback_suppression_seconds < 0
             or self.max_call_seconds <= 0
             or self.cleanup_timeout <= 0
@@ -64,6 +69,7 @@ class MediaSettings:
             or self.max_pending_final_chars < 1
             or self.max_playback_bytes < 2
             or self.interrupt_timeout <= 0
+            or not 0 <= self.farewell_grace_seconds <= 10
         ):
             raise ValueError("Invalid media call settings")
 
@@ -112,6 +118,7 @@ class MediaCall:
             self._deliver_utterance,
             silence_seconds=settings.turn_silence_seconds,
             continuation_seconds=settings.continuation_seconds,
+            numeric_continuation_seconds=settings.numeric_continuation_seconds,
             max_pending=settings.max_pending_finals,
             max_pending_chars=settings.max_pending_final_chars,
             emit=emit,
@@ -132,6 +139,10 @@ class MediaCall:
         self._activity_pending = b""
         self._response_task = None
         self._boundary_failure_task = None
+        self._end_call = asyncio.Event()
+        self._end_call_task = None
+        self._caller_farewell = False
+        self._last_opening = None
 
     def emit(self, event, **values):
         logger.info(event, extra={"event": event, **values})
@@ -166,6 +177,7 @@ class MediaCall:
                     CallStarted(
                         call_id=self._call_id(),
                         started_at_monotonic_ns=time.monotonic_ns(),
+                        caller_number=getattr(self.transport, "caller_number", "") or "",
                     )
                 )
                 self._call_started = True
@@ -179,6 +191,9 @@ class MediaCall:
                         self.conversation_port.wait_failure(self._call_id()),
                         name="voice-conversation-health",
                     )
+                self._end_call_task = asyncio.create_task(
+                    self._end_call.wait(), name="voice-end-call"
+                )
                 while True:
                     try:
                         audio = await self._read_audio()
@@ -217,11 +232,18 @@ class MediaCall:
         monitors = {
             task for task in (self._response_task, self._boundary_failure_task) if task is not None
         }
-        if not monitors:
+        end_call = self._end_call_task
+        if not monitors and end_call is None:
             return await self.transport.read_audio_chunk()
         reading = asyncio.create_task(self.transport.read_audio_chunk(), name="voice-media-read")
         try:
-            done, _ = await asyncio.wait(monitors | {reading}, return_when=asyncio.FIRST_COMPLETED)
+            waiting = monitors | {reading}
+            if end_call is not None:
+                waiting.add(end_call)
+            done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+            if end_call is not None and end_call in done:
+                # A completed farewell closes the media session; teardown sends BYE.
+                return None
             for task in monitors & done:
                 task.result()
                 raise RuntimeError("Conversation response stream ended")
@@ -240,7 +262,8 @@ class MediaCall:
 
     async def _stop_conversation_tasks(self):
         tasks = [
-            task for task in (self._response_task, self._boundary_failure_task) if task is not None
+            task for task in (self._response_task, self._boundary_failure_task, self._end_call_task)
+            if task is not None
         ]
         for task in tasks:
             if not task.done():
@@ -266,6 +289,8 @@ class MediaCall:
     async def _deliver_utterance(self, text):
         if self.state != CallState.ACTIVE:
             return
+        # Remember whether the caller is closing; a later non-farewell clears it.
+        self._caller_farewell = is_farewell(text)
         self._sequence += 1
         event = FinalUtterance(
             call_id=self._call_id(),
@@ -347,6 +372,14 @@ class MediaCall:
             if len(text) > self.settings.max_tts_chars:
                 await self._playback_fact(output, PlaybackState.FAILED, "text_limit")
                 raise ValueError("Speech text exceeds configured limit")
+            # A repeated greeting/stock intro is never spoken twice in one call.
+            opening = stock_opening_key(text)
+            if opening is not None:
+                if opening == self._last_opening:
+                    await self._playback_fact(output, PlaybackState.NOT_STARTED,
+                                              "duplicate_opening")
+                    return False
+                self._last_opening = opening
             self.detector.reset()
             self.detector.echo_rms = 0
             self._output_started = output.started_at
@@ -362,6 +395,11 @@ class MediaCall:
                 complete = task.result()
                 if complete:
                     await self._playback_fact(output, PlaybackState.COMPLETED)
+                    if self.settings.hangup_on_farewell and (
+                        is_farewell(text) or self._caller_farewell
+                    ):
+                        self._caller_farewell = False
+                        asyncio.create_task(self._graceful_end(), name="voice-farewell-end")
                     return True
                 await self._playback_fact(output, PlaybackState.UNKNOWN, "incomplete_transport")
                 return False
@@ -399,6 +437,12 @@ class MediaCall:
                     if output.reason or not output.accepted
                     else self.settings.post_playback_suppression_seconds
                 )
+
+    async def _graceful_end(self):
+        """Leave the media session shortly after a completed farewell."""
+        await asyncio.sleep(self.settings.farewell_grace_seconds)
+        if self.state == CallState.ACTIVE:
+            self._end_call.set()
 
     async def _interrupted_fact(self, output):
         if output.writing:

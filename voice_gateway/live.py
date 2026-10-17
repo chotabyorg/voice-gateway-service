@@ -58,6 +58,7 @@ class LiveSettings(BaseSettings):
     tts_expand_byn: bool = False
     tts_native_pcm_resampler: bool = False
     tts_strip_greeting: bool = False
+    send_caller_number: bool = False
 
     @model_validator(mode="after")
     def validate_activation(self):
@@ -273,6 +274,7 @@ def build_live_runtime(settings, config=None):
         config.conversation_token,
         registry,
         poll_seconds=config.conversation_poll_ms / 1000,
+        send_caller_number=config.send_caller_number,
     )
     runtime = LiveRuntime(
         settings,

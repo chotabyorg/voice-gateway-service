@@ -88,6 +88,33 @@ def called_did(settings, received):
     return "+" + match[1].lstrip("+")
 
 
+def caller_number(received) -> str:
+    """Best-effort caller ANI from the validated INVITE; empty when absent.
+
+    Never raises: a missing or non-belarusian caller id simply means the number
+    is unknown, and the call still proceeds.
+    """
+    raw = getattr(received, "wholeMsg", "")
+    if not isinstance(raw, str) or len(raw) > 16384 or "\x00" in raw:
+        return ""
+    headers = raw.split("\r\n\r\n", 1)[0].split("\r\n")
+    preferred, fallback = "", ""
+    for line in headers[1:]:
+        name = line.partition(":")[0].strip().lower()
+        if name not in {"from", "p-asserted-identity"}:
+            continue
+        value = line.partition(":")[2].strip()
+        match = re.search(r"(?:\+?375)([0-9]{9})", value)
+        if match is None:
+            continue
+        found = "+375" + match[1]
+        if name == "p-asserted-identity":
+            preferred = preferred or found
+        else:
+            fallback = fallback or found
+    return preferred or fallback
+
+
 class PCMBuffer:
     def __init__(self):
         self.lock = threading.Lock()
@@ -158,6 +185,7 @@ class SIPTransport(CallTransport):
     def __init__(self, client, call):
         self.client, self.call = client, call
         self.call_id = str(uuid4())
+        self.caller_number = ""
         self.audio = PCMBuffer()
         self.ready = asyncio.Event()
         self.disconnected = False
@@ -422,6 +450,7 @@ class SIPClient:
             if not self.stopping and self.registered and len(self.calls) <= self.settings.max_calls:
                 number = called_did(self.settings, received)
                 transport = SIPTransport(self, call)
+                transport.caller_number = caller_number(received)
                 self.registry.register(Registration(call_id=transport.call_id, number=number))
                 call.transport = transport
                 options.statusCode = 200

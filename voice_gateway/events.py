@@ -28,6 +28,7 @@ class CallEndReason(str, Enum):
 class CallStarted:
     call_id: str
     started_at_monotonic_ns: int
+    caller_number: str = ""
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal, NoReturn, TypeVar
@@ -96,6 +97,7 @@ class _Session:
     heartbeat: asyncio.Task[None] | None = None
     response_id: UUID | None = None
     event_sequence: int = 0
+    caller_number: str = ""
     evidence_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def identity(self) -> dict[str, str]:
@@ -114,6 +116,7 @@ class ConversationHTTPPort(StreamingConversationPort):
         timeout: float = 3,
         poll_seconds: float = 0.1,
         heartbeat_seconds: float = 1,
+        send_caller_number: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         url = urlsplit(base_url)
@@ -150,6 +153,7 @@ class ConversationHTTPPort(StreamingConversationPort):
         self.resolve_binding = resolve_binding
         self.timeout, self.poll_seconds = timeout, poll_seconds
         self.heartbeat_seconds = heartbeat_seconds
+        self.send_caller_number = send_caller_number
         self.sessions: dict[str, _Session] = {}
 
     async def _request(
@@ -202,22 +206,29 @@ class ConversationHTTPPort(StreamingConversationPort):
             raise ConversationBoundaryError()
         return session
 
+    @staticmethod
+    def _valid_caller_number(value: object) -> str:
+        return value if isinstance(value, str) and re.fullmatch(r"\+375[0-9]{9}", value) else ""
+
     async def call_started(self, event: CallStarted) -> None:
         if event.call_id in self.sessions or len(self.sessions) >= 128:
             raise ConversationBoundaryError()
         session = _Session(UUID(event.call_id))
+        session.caller_number = self._valid_caller_number(event.caller_number)
         self.sessions[event.call_id] = session
         try:
             async with asyncio.timeout(self.timeout):
                 binding = await self.resolve_binding(event.call_id)
-            result = await self._request(
-                session,
-                "calls/start",
-                _Call,
-                owner_id=binding.owner_id,
-                integration_id=str(binding.integration_id),
-                agent_id=str(binding.agent_id),
-            )
+            payload: dict[str, object] = {
+                "owner_id": binding.owner_id,
+                "integration_id": str(binding.integration_id),
+                "agent_id": str(binding.agent_id),
+            }
+            if self.send_caller_number and session.caller_number:
+                # Only a validated ANI is forwarded, and only when the platform
+                # side already accepts the field.
+                payload["caller_number"] = session.caller_number
+            result = await self._request(session, "calls/start", _Call, **payload)
             if result.state != "ACTIVE" or result.replayed:
                 raise ConversationBoundaryError()
             session.heartbeat = asyncio.create_task(

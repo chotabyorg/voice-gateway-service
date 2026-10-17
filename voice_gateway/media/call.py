@@ -348,13 +348,14 @@ class MediaCall:
             )
             return
         if authorized_speech is None:
-            self._awaiting_since = None
+            # Admission only: the answer still arrives through responses(), so
+            # the caller must not be treated as idle yet.
             return
         self._awaiting_since = (
             time.monotonic() if getattr(authorized_speech, "is_partial", False) else None
         )
         try:
-            await self.speak(
+            delivered = await self.speak(
                 authorized_speech.request_id,
                 authorized_speech.text,
                 speech_ended_at=self.utterances.dispatched_speech_at,
@@ -362,6 +363,10 @@ class MediaCall:
         except Exception as exc:
             self._awaiting_since = None
             self.emit("media_speech_error", error_type=type(exc).__name__)
+            return
+        if not delivered:
+            # Playback did not happen: nothing is owed for this turn.
+            self._awaiting_since = None
 
     async def feed_audio(self, audio):
         validate_pcm(audio)

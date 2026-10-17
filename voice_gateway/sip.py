@@ -31,9 +31,7 @@ BUSY_MESSAGE = (
     "Сейчас достигнуто максимальное количество одновременных разговоров. "
     "Пожалуйста, ожидайте на линии."
 )
-BUSY_TIMEOUT_MESSAGE = (
-    "К сожалению, все линии всё ещё заняты. Пожалуйста, перезвоните чуть позже."
-)
+BUSY_TIMEOUT_MESSAGE = "К сожалению, все линии всё ещё заняты. Пожалуйста, перезвоните чуть позже."
 
 
 class SIPSettings(BaseSettings):
@@ -277,8 +275,9 @@ class SIPTransport(CallTransport):
 
 
 class SIPClient:
-    def __init__(self, settings, handle_transport, registry, pj=None, *,
-                 capacity=None, announce=None):
+    def __init__(
+        self, settings, handle_transport, registry, pj=None, *, capacity=None, announce=None
+    ):
         self.settings, self.handle_transport, self.registry, self.pj = (
             settings,
             handle_transport,
@@ -347,9 +346,10 @@ class SIPClient:
             ) = 0
             media = config.mediaConfig.transportConfig
             media.boundAddress = media.publicAddress = self.settings.bind_address
-            media.port, media.portRange = self.settings.rtp_port, 2 * (
-            self.settings.max_calls + self.settings.max_waiting
-        )
+            media.port, media.portRange = (
+                self.settings.rtp_port,
+                2 * (self.settings.max_calls + self.settings.max_waiting),
+            )
             self.account = account_type()
             self.poll_task = asyncio.create_task(self._poll())
             self.account.create(config)

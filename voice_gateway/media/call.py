@@ -397,9 +397,7 @@ class MediaCall:
             # would greet a second time (often the whole reply when the caller
             # says hello first).
             if not has_meaningful_speech(text):
-                await self._playback_fact(
-                    output, PlaybackState.NOT_STARTED, "stock_opening_only"
-                )
+                await self._playback_fact(output, PlaybackState.NOT_STARTED, "stock_opening_only")
                 return False
             # A repeated greeting/stock intro is never spoken twice in one call,
             # even when streaming delivers it as separate sentences.

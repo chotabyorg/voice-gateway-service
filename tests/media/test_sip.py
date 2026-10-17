@@ -78,8 +78,12 @@ async def test_busy_call_is_announced_then_admitted_when_a_slot_frees():
         announcements.append(text)
 
     client = SIPClient(
-        settings(max_calls=1), handle, Registry(), None,
-        capacity=lambda: free["slot"], announce=announce,
+        settings(max_calls=1),
+        handle,
+        Registry(),
+        None,
+        capacity=lambda: free["slot"],
+        announce=announce,
     )
     transport = QueuedTransport()
     task = asyncio.create_task(client._serve_queued(transport))
@@ -104,8 +108,12 @@ async def test_busy_call_times_out_with_a_closing_notice():
         announcements.append(text)
 
     client = SIPClient(
-        settings(max_calls=1, busy_hold_seconds=0.3), handle, Registry(), None,
-        capacity=lambda: False, announce=announce,
+        settings(max_calls=1, busy_hold_seconds=0.3),
+        handle,
+        Registry(),
+        None,
+        capacity=lambda: False,
+        announce=announce,
     )
     await asyncio.wait_for(client._serve_queued(QueuedTransport()), 2)
     assert admitted == []

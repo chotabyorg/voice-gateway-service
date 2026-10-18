@@ -2,7 +2,11 @@
 # Prepare an isolated native runtime; never targets a running service implicitly.
 set -euo pipefail
 VENV=${1:?Usage: bash scripts/build_pjsua2.sh /absolute/path/to/staging-venv}
+WHEEL_DIRECTORY=${2:-}
 [[ "$VENV" = /* ]] || { printf 'An absolute staging venv is required.\n' >&2; exit 2; }
+if [[ -n "$WHEEL_DIRECTORY" ]]; then
+    [[ "$WHEEL_DIRECTORY" = /* ]] || { printf 'An absolute wheel directory is required.\n' >&2; exit 2; }
+fi
 PYTHON="$VENV/bin/python"
 "$PYTHON" -c 'import sys; assert (3,11) <= sys.version_info[:2] < (3,13)'
 command -v swig >/dev/null
@@ -26,6 +30,10 @@ cd pjsip-apps/src/swig/python
 # SWIG's large generated wrapper otherwise inherits Python's debug symbols,
 # which can exhaust a small host. Keep the native libraries optimized above.
 CFLAGS='-g0' CXXFLAGS='-g0' make wheel PYTHON_EXE="$PYTHON"
+if [[ -n "$WHEEL_DIRECTORY" ]]; then
+    mkdir -p "$WHEEL_DIRECTORY"
+    cp dist/pjsua2-*.whl "$WHEEL_DIRECTORY/"
+fi
 "$PYTHON" -m pip install --no-deps dist/pjsua2-*.whl
 "$PYTHON" - <<'PY'
 import ctypes

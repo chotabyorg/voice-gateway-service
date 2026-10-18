@@ -199,6 +199,13 @@ Python 3.11/3.12 environment first. Do not rebuild inside the running release.
 The production active/waiting limits still bound admission; the compiled ceiling
 does not activate more calls. Verify native simultaneous SIP/RTP sessions before
 promoting the binding together with the source release after call drain.
+The CI native job builds a Python 3.12 wheel on Ubuntu 24.04 and tests five and
+eight simultaneous loopback calls with real SIP/RTP and synthetic PCM. Its
+artifact includes the source revision and wheel checksum. Prefer that artifact
+when the telephone host cannot safely compile the large SWIG wrapper. Verify the
+matching interpreter ABI, OS libraries, checksum and native capacity in a staging
+venv on the target host before promotion. This is independent of provider/CRM
+acceptance and does not prove carrier audio quality.
 
 On hangup, media cleanup aborts batch STT: it drops unsubmitted audio, cancels
 queued and in-flight requests and fences late results. Provider cancellation and

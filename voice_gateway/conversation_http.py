@@ -321,6 +321,7 @@ class ConversationHTTPPort(StreamingConversationPort):
                     str(permission.response_id),
                     permission.text,
                     is_partial=bool(permission.is_partial),
+                    response_group=str(permission.turn_id),
                 )
         raise ConversationBoundaryError()
 

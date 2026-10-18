@@ -90,6 +90,7 @@ class MediaSettings:
 @dataclass
 class _Output:
     request_id: str
+    response_group: str | None = None
     generated: int = 0
     accepted: int = 0
     last_progress: int = 0
@@ -143,6 +144,10 @@ class MediaCall:
         self._speech_lock = asyncio.Lock()
         self._output_task = None
         self._output = None
+        # The HTTP response stream is serial: finish a response before leasing
+        # another. Retain only the last interrupted group, not a turn journal.
+        self._interrupted_response_group: str | None = None
+        self._open_response_group: str | None = None
         self._retired_outputs = set()
         self._clear_output_task = None
         self._interrupt_count = 0
@@ -284,10 +289,14 @@ class MediaCall:
                 if self.state != CallState.ACTIVE:
                     return
                 # A partial sentence means the same turn is still being written.
-                self._awaiting_since = (
-                    time.monotonic() if getattr(speech, "is_partial", False) else None
+                if not self._group_interrupted(speech.response_group):
+                    self._open_response_group = speech.response_group
+                    self._awaiting_since = time.monotonic() if speech.is_partial else None
+                await self.speak(
+                    speech.request_id, speech.text, response_group=speech.response_group
                 )
-                await self.speak(speech.request_id, speech.text)
+                if not speech.is_partial and self._open_response_group == speech.response_group:
+                    self._open_response_group = None
 
     async def _stop_conversation_tasks(self):
         tasks = [
@@ -361,6 +370,7 @@ class MediaCall:
                 authorized_speech.request_id,
                 authorized_speech.text,
                 speech_ended_at=self.utterances.dispatched_speech_at,
+                response_group=authorized_speech.response_group,
             )
         except Exception as exc:
             self._awaiting_since = None
@@ -380,7 +390,7 @@ class MediaCall:
             if event is None:
                 return
             await self.interrupt(reason="barge_in")
-            self.utterances.speech()
+            self._caller_speech()
             for chunk in event.chunks:
                 await self.stt.feed_audio(chunk)
             return
@@ -392,7 +402,7 @@ class MediaCall:
             # classified final forever, even after STT found the end of speech.
             ended_at = self.stt.last_speech_at
             if ended_at is not None and ended_at > self.utterances.last_speech:
-                self.utterances.speech(ended_at=ended_at)
+                self._caller_speech(ended_at=ended_at)
             return
         samples = self._activity_pending + audio
         end = len(samples) // PCM.frame_bytes * PCM.frame_bytes
@@ -401,12 +411,22 @@ class MediaCall:
         for offset in range(0, end, PCM.frame_bytes):
             frame_end = offset + PCM.frame_bytes
             if rms(samples[offset:frame_end]) >= self.settings.speech_threshold:
-                self.utterances.speech(
+                self._caller_speech(
                     ended_at=received_at - (len(samples) - frame_end) / PCM.bytes_per_second
                 )
         await self.stt.feed_audio(audio)
 
-    async def speak(self, request_id, text, *, speech_ended_at=None):
+    def _caller_speech(self, *, ended_at=None):
+        self.utterances.speech(ended_at=ended_at)
+        # There may be no _output between a completed partial and its suffix.
+        # Use the existing acoustic speech observation during that gap too.
+        if self.settings.barge_in and self._open_response_group is not None:
+            self._interrupted_response_group = self._open_response_group
+
+    def _group_interrupted(self, response_group):
+        return response_group is not None and response_group == self._interrupted_response_group
+
+    async def speak(self, request_id, text, *, speech_ended_at=None, response_group=None):
         """Play locally authorized text; keep each output's counters isolated."""
         async with self._speech_lock:
             await self._interrupt_ready.wait()
@@ -417,7 +437,15 @@ class MediaCall:
             if self._clear_output_task is not None and not self._clear_output_task.done():
                 raise RuntimeError("Previous transport output is still clearing")
             text = text.strip()
-            output = _Output(request_id, speech_ended_at=speech_ended_at)
+            output = _Output(
+                request_id, response_group=response_group, speech_ended_at=speech_ended_at
+            )
+            if self._group_interrupted(response_group):
+                # A late suffix can be leased before the caller's new STT final
+                # reaches Conversation. Barge-in already stopped this reply:
+                # do not restart it or invoke TTS; report zero actual delivery.
+                await self._playback_fact(output, PlaybackState.NOT_STARTED, "barge_in_suffix")
+                return False
             if not text:
                 await self._playback_fact(output, PlaybackState.NOT_STARTED, "empty_text")
                 return False
@@ -681,6 +709,8 @@ class MediaCall:
         self._interrupt_ready.clear()
         try:
             task, output = self._output_task, self._output
+            if reason == "barge_in" and output is not None and output.response_group is not None:
+                self._interrupted_response_group = output.response_group
             if output is not None and task is not None and not task.done():
                 output.reason = reason
                 if reason == "barge_in" and self.settings.smooth_barge_in and output.accepted:

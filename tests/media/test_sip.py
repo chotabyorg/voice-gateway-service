@@ -47,6 +47,38 @@ async def until(predicate):
             await asyncio.sleep(0.005)
 
 
+async def test_undersized_native_build_fails_before_registration_or_listening():
+    pj = native()
+    pj.capacity = 4
+    client = SIPClient(settings(max_calls=5, max_waiting=2), None, Registry(), pj)
+    with pytest.raises(RuntimeError, match="Native SIP capacity"):
+        await client.start()
+    endpoint = pj.endpoints[0]
+    assert endpoint.destroyed
+    assert not hasattr(endpoint, "transport_conf")
+    assert client.account is None and not client.registered
+
+
+async def test_native_capacity_includes_waiting_slots():
+    pj = native()
+    pj.capacity = 5
+    client = SIPClient(settings(max_calls=5, max_waiting=1), None, Registry(), pj)
+    with pytest.raises(RuntimeError, match="Native SIP capacity"):
+        await client.start()
+    assert pj.endpoints[0].destroyed and client.account is None
+
+
+async def test_native_capacity_equal_to_call_and_waiting_limit_is_accepted():
+    pj = native()
+    pj.capacity = 7
+    client = SIPClient(settings(max_calls=5, max_waiting=2), None, Registry(), pj)
+    await client.start()
+    try:
+        assert client.registered and pj.endpoints[0].conf.uaConfig.maxCalls == 7
+    finally:
+        await client.stop()
+
+
 def test_dialed_did_is_never_used_as_the_caller_number():
     from voice_gateway.sip import caller_ani, caller_number
 

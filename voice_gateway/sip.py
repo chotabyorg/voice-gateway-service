@@ -312,7 +312,13 @@ class SIPClient:
         try:
             ep = pj.EpConfig()
             ep.uaConfig.threadCnt, ep.uaConfig.mainThreadOnly = 0, True
-            ep.uaConfig.maxCalls = self.settings.max_calls + self.settings.max_waiting
+            required_capacity = self.settings.max_calls + self.settings.max_waiting
+            # PJSUA2 2.17 initializes this default from PJSUA_MAX_CALLS.
+            # Assigning a larger value succeeds in Python but native libInit
+            # silently clamps it. Reject that build before binding/registering.
+            if ep.uaConfig.maxCalls < required_capacity:
+                raise RuntimeError("Native SIP capacity is below configured call capacity")
+            ep.uaConfig.maxCalls = required_capacity
             ep.uaConfig.userAgent = "Chota-Voice-Gateway"
             ep.medConfig.clockRate = ep.medConfig.sndClockRate = 8000
             ep.medConfig.audioFramePtime, ep.medConfig.ecTailLen = 20, 0

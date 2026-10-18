@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 
 
 def native():
-    pj = NS(events=deque(), calls=[], endpoints=[], registration_code=200)
+    pj = NS(events=deque(), calls=[], endpoints=[], registration_code=200, capacity=64)
     pj.PJSUA_INVALID_ID = -1
     pj.PJSIP_TRANSPORT_UDP = 1
     pj.PJSIP_INV_STATE_CONFIRMED = 5
@@ -117,7 +117,7 @@ def native():
             self.onCallState(NS())
 
     pj.Endpoint, pj.Account, pj.Call, pj.AudioMediaPort = Endpoint, Account, Call, Port
-    pj.EpConfig = lambda: NS(uaConfig=NS(), medConfig=NS(), logConfig=NS())
+    pj.EpConfig = lambda: NS(uaConfig=NS(maxCalls=pj.capacity), medConfig=NS(), logConfig=NS())
     pj.TransportConfig = NS
     pj.AccountConfig = lambda: NS(
         regConfig=NS(),

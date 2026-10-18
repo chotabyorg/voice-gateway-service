@@ -189,6 +189,17 @@ loopback verification and the one-number end-to-end acceptance remain separate
 from tests using a PJSUA2 double. No live carrier route is changed by choosing a
 mode in source code.
 
+The pinned PJSUA2 2.17 build must support `MAX_CALLS + MAX_WAITING` natively.
+Its default build supports only four calls and silently clamps a larger Python
+configuration. Startup rejects an insufficient compiled capacity before opening
+the SIP listener or registering. `scripts/build_pjsua2.sh /absolute/staging/.venv`
+builds the pinned official source with a compile-time capacity of 64 and verifies
+the effective native setting. Install `setuptools` and `wheel` in that isolated
+Python 3.11/3.12 environment first. Do not rebuild inside the running release.
+The production active/waiting limits still bound admission; the compiled ceiling
+does not activate more calls. Verify native simultaneous SIP/RTP sessions before
+promoting the binding together with the source release after call drain.
+
 On hangup, media cleanup aborts batch STT: it drops unsubmitted audio, cancels
 queued and in-flight requests and fences late results. Provider cancellation and
 close share a deadline of at most 0.5 seconds. This avoids retaining the single

@@ -50,21 +50,22 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build pinned binding away from the telephone host
+        id: native-build
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y build-essential swig libssl-dev
           python -m venv "$RUNNER_TEMP/native-sip"
           "$RUNNER_TEMP/native-sip/bin/python" -m pip install setuptools==84.0.0 wheel==0.45.1
           bash scripts/build_pjsua2.sh "$RUNNER_TEMP/native-sip" "$RUNNER_TEMP/native-wheel"
+          sha256sum "$RUNNER_TEMP/native-wheel/"*.whl > "$RUNNER_TEMP/native-wheel/SHA256SUMS"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/native-wheel/SOURCE_REVISION"
       - name: Verify real simultaneous native SIP and RTP without providers
         run: |
           ulimit -c 0
           "$RUNNER_TEMP/native-sip/bin/python" -m pip install -r requirements.txt
-          "$RUNNER_TEMP/native-sip/bin/python" scripts/sip_capacity.py 5 2
-          "$RUNNER_TEMP/native-sip/bin/python" scripts/sip_capacity.py 8 0
-          sha256sum "$RUNNER_TEMP/native-wheel/"*.whl > "$RUNNER_TEMP/native-wheel/SHA256SUMS"
-          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/native-wheel/SOURCE_REVISION"
+          "$RUNNER_TEMP/native-sip/bin/python" scripts/check_native_capacity.py "$RUNNER_TEMP/native-wheel/native-capacity.json"
       - name: Retain exact native artifact for staged verification
+        if: always() && steps.native-build.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pjsua2-2.17-capacity64-python312-linux-amd64

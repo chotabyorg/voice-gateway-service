@@ -119,6 +119,7 @@ async def main(count=5, waiting=2):
             progress["admitted"] = len(calls)
             print("SIP_PROGRESS=" + json.dumps(progress), flush=True)
             peak = max(peak, len(client.calls))
+        progress.update(peak=peak, registered_calls=registry.count, native_calls=len(client.calls))
         assert peak == count and registry.count == count and len(client.calls) == count
         progress["stage"] = "rtp"
         for sequence in range(120):
@@ -130,6 +131,7 @@ async def main(count=5, waiting=2):
             await asyncio.sleep(0.02)
         progress["stage"] = "audio_check"
         inbound = [data["bytes"] for data in received.values() if data["nonzero"]]
+        progress["nonzero_inbound_sessions"] = len(inbound)
         assert len(inbound) == count
         outbound = []
         for call in calls:
@@ -142,6 +144,7 @@ async def main(count=5, waiting=2):
             )
             assert useful > 0
             outbound.append(useful)
+            progress["useful_outbound_packets"] = outbound.copy()
             call["request"]("BYE", 2)
             await sip.response("BYE")
         async with asyncio.timeout(5):

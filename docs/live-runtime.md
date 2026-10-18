@@ -189,6 +189,24 @@ loopback verification and the one-number end-to-end acceptance remain separate
 from tests using a PJSUA2 double. No live carrier route is changed by choosing a
 mode in source code.
 
+The pinned PJSUA2 2.17 build must support `MAX_CALLS + MAX_WAITING` natively.
+Its default build supports only four calls and silently clamps a larger Python
+configuration. Startup rejects an insufficient compiled capacity before opening
+the SIP listener or registering. `scripts/build_pjsua2.sh /absolute/staging/.venv`
+builds the pinned official source with a compile-time capacity of 64 and verifies
+the effective native setting. Install `setuptools` and `wheel` in that isolated
+Python 3.11/3.12 environment first. Do not rebuild inside the running release.
+The production active/waiting limits still bound admission; the compiled ceiling
+does not activate more calls. Verify native simultaneous SIP/RTP sessions before
+promoting the binding together with the source release after call drain.
+The CI native job builds a Python 3.12 wheel on Ubuntu 24.04 and tests five and
+eight simultaneous loopback calls with real SIP/RTP and synthetic PCM. Its
+artifact includes the source revision and wheel checksum. Prefer that artifact
+when the telephone host cannot safely compile the large SWIG wrapper. Verify the
+matching interpreter ABI, OS libraries, checksum and native capacity in a staging
+venv on the target host before promotion. This is independent of provider/CRM
+acceptance and does not prove carrier audio quality.
+
 On hangup, media cleanup aborts batch STT: it drops unsubmitted audio, cancels
 queued and in-flight requests and fences late results. Provider cancellation and
 close share a deadline of at most 0.5 seconds. This avoids retaining the single

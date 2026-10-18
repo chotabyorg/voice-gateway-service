@@ -75,11 +75,14 @@ async def main(count=5, waiting=2):
             uri = f"sip:+375170000000@127.0.0.1:{config.port}"
             call = {"id": call_id, "tag": tag, "uri": uri, "to": f"<{uri}>", "rtp": rtp}
 
-            def request(method, cseq, body="", *, call=call):
+            def request(method, cseq, body="", *, call=call, transaction_ack=False):
                 target_uri = call.get("contact", call["uri"])
+                branch = call["invite_branch"] if transaction_ack else "z9hG4bK" + uuid4().hex
+                if method == "INVITE":
+                    call["invite_branch"] = branch
                 headers = [
                     f"{method} {target_uri} SIP/2.0",
-                    f"Via: SIP/2.0/UDP 127.0.0.1:{sip.port};branch=z9hG4bK{uuid4().hex}",
+                    f"Via: SIP/2.0/UDP 127.0.0.1:{sip.port};branch={branch}",
                     f"From: <sip:synthetic@127.0.0.1>;tag={call['tag']}",
                     f"To: {call['to']}",
                     f"Call-ID: {call['id']}",
@@ -121,6 +124,25 @@ async def main(count=5, waiting=2):
             peak = max(peak, len(client.calls))
         progress.update(peak=peak, registered_calls=registry.count, native_calls=len(client.calls))
         assert peak == count and registry.count == count and len(client.calls) == count
+        # An extra caller must receive a finite busy response, never abort the
+        # native process or displace an admitted call. Exercise both the app
+        # limit (waiting > 0) and the configured native limit (waiting == 0).
+        progress["stage"] = "overflow"
+        extra = dict(call, id=str(uuid4()), tag=uuid4().hex, to=f"<{uri}>")
+        extra.pop("contact", None)
+        request("INVITE", 1, sdp, call=extra)
+        async with asyncio.timeout(5):
+            while True:
+                data, _ = await sip.messages.get()
+                response = data.decode("ascii")
+                if f"Call-ID: {extra['id']}" in response and response.startswith("SIP/2.0 "):
+                    code = int(response.split()[1])
+                    if code >= 200:
+                        break
+        progress["overflow_status"] = code
+        assert code == 486
+        extra["to"] = re.search(r"^To: (.+)$", response, re.M)[1].strip()
+        request("ACK", 1, call=extra, transaction_ack=True)
         progress["stage"] = "rtp"
         for sequence in range(120):
             for index, call in enumerate(calls):
@@ -155,6 +177,7 @@ async def main(count=5, waiting=2):
             kind="LOOPBACK_REAL_PJSUA2_RTP_SYNTHETIC_PBX_NO_PROVIDERS",
             concurrent_calls=count,
             peak_native_calls=peak,
+            overflow_status=code,
             inbound_pcm_bytes=inbound,
             useful_outbound_packets=outbound,
             sessions_remaining=0,

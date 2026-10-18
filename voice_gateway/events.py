@@ -47,6 +47,9 @@ class AuthorizedSpeech:
     text: str
     # A partial (leased) sentence: the agent is still working on the same turn.
     is_partial: bool = False
+    # Opaque local correlation for sentences from the same authorized reply.
+    # It grants no Conversation authority and is never sent as a playback fact.
+    response_group: str | None = None
 
 
 @dataclass(frozen=True)

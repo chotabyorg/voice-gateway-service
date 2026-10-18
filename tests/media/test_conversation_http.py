@@ -227,6 +227,23 @@ async def test_admission_returns_without_waiting_for_ai():
         await port.close()
 
 
+async def test_local_speech_group_correlates_existing_wire_turn_without_changing_facts():
+    server = Server()
+    port = adapter(server)
+    call_id = str(uuid4())
+    responses = port.responses(call_id)
+    try:
+        await port.call_started(CallStarted(call_id, time.monotonic_ns()))
+        server.available = True
+        speech = await anext(responses)
+        assert speech.request_id == server.response
+        assert speech.response_group == server.turn
+        assert speech.is_partial is False
+    finally:
+        await responses.aclose()
+        await port.close()
+
+
 async def test_blank_authorized_text_reports_not_started_instead_of_hanging_output():
     from tests.media.media_fakes import FakeConversationPort
 

@@ -48,6 +48,14 @@ handed to the transport. It does **not** prove the caller heard them. A partial
 transport failure is `unknown`; barge-in is `interrupted`; neither is full
 completion.
 
+For streamed speech, the HTTP adapter exposes the existing turn identifier as
+an opaque local response group. If the caller interrupts one sentence, MediaCall
+also fences late sentences from that group before synthesis, reporting
+`not_started` with zero generated/accepted bytes. The serial response stream
+retains only the last interrupted group per live call; it does not schedule or
+cancel canonical turns. A fresh group's authorized speech can play normally.
+Discarding a late suffix does not clear the wait for the caller's new answer.
+
 After a terminal playback fact is attempted, cancellation/cleanup cannot emit a
 different terminal fact for the same output: the original request may already
 have committed even if its acknowledgement was lost. Conversation boundary

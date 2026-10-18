@@ -30,9 +30,10 @@ logger = logging.getLogger(__name__)
 IDLE_MARKER = "[silence]"
 
 # How long an admitted caller utterance may keep the agent "thinking" before the
-# idle machinery is allowed to nudge or end the call again. A slow model reply is
-# still an answer in progress, not silence.
-RESPONSE_PENDING_SECONDS = 30.0
+# idle machinery is allowed to nudge or end the call again. Main's existing AI
+# request budget is 120 seconds; leave 30 seconds for queue/delivery overhead.
+# This is a bounded media wait, not permission to retry or execute any action.
+RESPONSE_PENDING_SECONDS = 150.0
 
 
 class CallState(str, Enum):

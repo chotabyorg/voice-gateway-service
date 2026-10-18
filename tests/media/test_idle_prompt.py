@@ -2,12 +2,14 @@
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from tests.media.media_fakes import FakeConversationPort, FakeSTT, FakeTTS, FakeTransport
 from voice_gateway.events import AuthorizedSpeech
 from voice_gateway.media.call import IDLE_MARKER, CallState, MediaCall, MediaSettings
+import voice_gateway.media.call as call_module
 
 
 @pytest.mark.asyncio
@@ -65,6 +67,43 @@ async def test_caller_is_not_nudged_while_the_agent_prepares_an_answer():
     assert port.utterances == []  # no "are you there?" while answering
     call.state = CallState.DRAINING
     await asyncio.wait_for(task, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", [31, 50, 119, 149])
+async def test_slow_admitted_answer_does_not_create_idle_input_or_hangup(monkeypatch, elapsed):
+    """The old 30-second guard injected silence into a still-running request."""
+    port = FakeConversationPort(None)
+    call = MediaCall(
+        FakeTransport(),
+        FakeSTT(),
+        FakeTTS(),
+        port,
+        settings=MediaSettings(idle_prompt_seconds=10, max_idle_prompts=1),
+    )
+    call.state = CallState.ACTIVE
+    call._awaiting_since = 1000
+    monkeypatch.setattr(call_module, "time", SimpleNamespace(monotonic=lambda: 1000 + elapsed))
+    polls = 0
+
+    async def poll(_seconds):
+        nonlocal polls
+        polls += 1
+        if polls == 2:
+            call.state = CallState.DRAINING
+
+    monkeypatch.setattr(call_module, "asyncio", SimpleNamespace(sleep=poll))
+    await call._idle_prompts()
+    assert polls == 2
+    assert port.utterances == []
+    assert call._idle_nudges == 0 and not call._end_call.is_set()
+
+
+def test_pending_answer_wait_is_bounded(monkeypatch):
+    call = MediaCall(FakeTransport(), FakeSTT(), FakeTTS(), FakeConversationPort(None))
+    call._awaiting_since = 1000
+    monkeypatch.setattr(call_module, "time", SimpleNamespace(monotonic=lambda: 1150))
+    assert not call._awaiting_answer()
 
 
 @pytest.mark.asyncio

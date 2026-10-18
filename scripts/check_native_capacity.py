@@ -23,6 +23,8 @@ def main(output):
                 if line.startswith("SIP_CAPACITY_RESULT=")
             ]
             result = results[0] if len(results) == 1 else {"passed": False}
+            if not results and "ModuleNotFoundError: No module named 'httpx'" in process.stderr:
+                result["error_type"] = "MISSING_OPTIONAL_HTTP_BOUNDARY_DEPENDENCY"
             result.update(process_exit=process.returncode, native_abort=process.returncode < 0)
         except subprocess.TimeoutExpired:
             result = {"passed": False, "error_type": "SUBPROCESS_TIMEOUT"}

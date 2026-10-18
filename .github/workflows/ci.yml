@@ -62,7 +62,8 @@ jobs:
       - name: Verify real simultaneous native SIP and RTP without providers
         run: |
           ulimit -c 0
-          "$RUNNER_TEMP/native-sip/bin/python" -m pip install -r requirements.txt
+          # SIP routing imports the optional HTTP boundary even on loopback.
+          "$RUNNER_TEMP/native-sip/bin/python" -m pip install -r requirements.txt httpx==0.28.1
           "$RUNNER_TEMP/native-sip/bin/python" scripts/check_native_capacity.py "$RUNNER_TEMP/native-wheel/native-capacity.json"
       - name: Retain exact native artifact for staged verification
         if: always() && steps.native-build.outcome == 'success'

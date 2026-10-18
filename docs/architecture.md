@@ -48,6 +48,14 @@ handed to the transport. It does **not** prove the caller heard them. A partial
 transport failure is `unknown`; barge-in is `interrupted`; neither is full
 completion.
 
+After a terminal playback fact is attempted, cancellation/cleanup cannot emit a
+different terminal fact for the same output: the original request may already
+have committed even if its acknowledgement was lost. Conversation boundary
+diagnostics report only the operation, validation stage and HTTP status, never
+payloads or exception details. A failed AI turn can receive a Conversation-owned
+authorized failure response using the existing protocol, keeping media active;
+Voice does not choose that text or retry the business action.
+
 ## State and failure handling
 
 Call state exists only for the live process/session. It holds transport and

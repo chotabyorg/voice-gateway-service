@@ -153,7 +153,7 @@ async def test_media_accepts_new_final_during_playback_and_reports_completion():
         await port.close()
 
 
-async def test_heartbeat_failure_stops_active_audio_and_cleans_resources():
+async def test_heartbeat_failure_stops_active_audio_and_cleans_resources(caplog):
     server = Server()
     server.available = True
     port = adapter(server)
@@ -171,6 +171,16 @@ async def test_heartbeat_failure_stops_active_audio_and_cleans_resources():
         assert written == len(transport.sent)
         assert call.state == CallState.CLOSED and server.ended
         assert stt.stopped and tts.closed and not port.sessions
+        diagnostic = [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith("conversation_boundary_failure")
+        ]
+        assert any(
+            "operation=calls/heartbeat stage=HTTP_STATUS http_status=503" in line
+            for line in diagnostic
+        )
+        assert not any("Ответ" in line or "a" * 32 in line for line in diagnostic)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

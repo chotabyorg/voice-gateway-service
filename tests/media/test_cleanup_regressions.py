@@ -90,6 +90,42 @@ async def test_transport_failure_reports_unknown_even_if_acceptance_is_zero(fail
 
 
 @pytest.mark.asyncio
+async def test_cancel_after_terminal_fact_attempt_never_sends_conflicting_cleanup_fact():
+    transport, stt, tts, port = (
+        FakeTransport(),
+        FakeSTT(),
+        FakeTTS(pcm(1000, 40)),
+        FakeConversationPort(None),
+    )
+    terminal_entered = asyncio.Event()
+    original = port.playback_fact
+
+    async def lost_terminal_ack(event):
+        await original(event)
+        if event.state == PlaybackState.COMPLETED:
+            terminal_entered.set()
+            await asyncio.Event().wait()
+
+    port.playback_fact = lost_terminal_ack
+    call = MediaCall(transport, stt, tts, port)
+    running = asyncio.create_task(call.run())
+    await asyncio.wait_for(stt.started.wait(), 1)
+    speaking = asyncio.create_task(call.speak("terminal-race", "Запрос обработан."))
+    await asyncio.wait_for(terminal_entered.wait(), 2)
+    speaking.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await speaking
+    terminal = [
+        fact
+        for fact in port.playback
+        if fact.state not in {PlaybackState.STARTED, PlaybackState.PARTIAL}
+    ]
+    assert len(terminal) == 1 and terminal[0].state == PlaybackState.COMPLETED
+    await transport.incoming.put(None)
+    await running
+
+
+@pytest.mark.asyncio
 async def test_call_cleanup_bounds_cancellation_resistant_resource_close():
     transport, stt, tts = FakeTransport(), FakeSTT(), FakeTTS()
     started, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()

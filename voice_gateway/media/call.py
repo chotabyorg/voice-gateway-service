@@ -94,6 +94,7 @@ class _Output:
     last_progress: int = 0
     writing: bool = False
     transport_failed: bool = False
+    terminal_fact_attempted: bool = False
     reason: str | None = None
     revoked: asyncio.Event = field(default_factory=asyncio.Event)
     control: PlaybackControl = field(default_factory=PlaybackControl)
@@ -627,6 +628,12 @@ class MediaCall:
         return result.complete and active() and output.accepted == output.generated
 
     async def _playback_fact(self, output, state, reason=None):
+        if output.terminal_fact_attempted:
+            # A terminal request may have committed before cancellation/lost ACK.
+            # Cleanup must not send a different terminal state for that output.
+            return
+        if state not in {PlaybackState.STARTED, PlaybackState.PARTIAL}:
+            output.terminal_fact_attempted = True
         event = PlaybackFact(
             call_id=self._call_id(),
             request_id=output.request_id,

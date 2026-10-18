@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -21,6 +22,8 @@ from voice_gateway.events import (
     PlaybackState,
 )
 from voice_gateway.ports import StreamingConversationPort
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationBoundaryError(RuntimeError):
@@ -160,6 +163,8 @@ class ConversationHTTPPort(StreamingConversationPort):
     async def _request(
         self, session: _Session, path: str, response_type: type[Response], **payload: object
     ) -> Response:
+        stage = "TRANSPORT"
+        status: int | None = None
         try:
             async with asyncio.timeout(self.timeout):
                 async with self.client.stream(
@@ -167,8 +172,10 @@ class ConversationHTTPPort(StreamingConversationPort):
                     "/internal/v1/voice/" + path,
                     json={**session.identity(), **payload},
                 ) as response:
+                    stage, status = "HTTP_STATUS", response.status_code
                     if response.status_code != 200:
                         raise ConversationBoundaryError()
+                    stage = "HEADERS"
                     media = response.headers.get_list("content-type")
                     encoding = response.headers.get_list("content-encoding")
                     if (
@@ -178,10 +185,12 @@ class ConversationHTTPPort(StreamingConversationPort):
                     ):
                         raise ConversationBoundaryError()
                     body = bytearray()
+                    stage = "BODY"
                     async for chunk in response.aiter_bytes():
                         if len(body) + len(chunk) > 65536:
                             raise ConversationBoundaryError()
                         body.extend(chunk)
+                stage = "VALIDATION"
                 result = response_type.model_validate(
                     json.loads(
                         bytes(body),
@@ -189,6 +198,7 @@ class ConversationHTTPPort(StreamingConversationPort):
                         parse_constant=_invalid_constant,
                     )
                 )
+                stage = "CORRELATION"
                 if (
                     result.call_id != session.call_id
                     or result.media_session_id != session.media_session_id
@@ -198,6 +208,14 @@ class ConversationHTTPPort(StreamingConversationPort):
         except asyncio.CancelledError:
             raise
         except Exception:
+            # Closed operation names and stage/status only: no payload, token,
+            # customer text, response body or exception representation.
+            logger.warning(
+                "conversation_boundary_failure operation=%s stage=%s http_status=%s",
+                path,
+                stage,
+                status,
+            )
             session.failed.set()
             raise ConversationBoundaryError() from None
 

@@ -21,6 +21,7 @@ from voice_gateway.events import (
     PlaybackFact,
     PlaybackState,
 )
+from voice_gateway.media.completion import finish_owned_task
 from voice_gateway.ports import StreamingConversationPort
 
 logger = logging.getLogger(__name__)
@@ -328,25 +329,33 @@ class ConversationHTTPPort(StreamingConversationPort):
     async def playback_fact(self, event: PlaybackFact) -> None:
         session = self._session(event.call_id)
         async with session.evidence_lock:
-            if str(session.response_id) != event.request_id:
-                session.failed.set()
+            if session.failed.is_set():
                 raise ConversationBoundaryError()
-            sequence = session.event_sequence + 1
-            result = await self._request(
-                session,
-                "playback",
-                _Fact,
-                response_id=event.request_id,
-                event_sequence=sequence,
-                state=event.state.value.upper(),
-                generated_bytes=event.generated_bytes,
-                transport_accepted_bytes=event.transport_accepted_bytes,
-                terminal=event.state not in {PlaybackState.STARTED, PlaybackState.PARTIAL},
-            )
-            if result.response_id != session.response_id or result.event_sequence != sequence:
-                session.failed.set()
-                raise ConversationBoundaryError()
-            session.event_sequence = sequence
+            # Barge-in cancels the audio producer, but a POST may already have
+            # committed. Settle its bounded ACK and sequence update while still
+            # owning the lock before allowing an interrupted fact to follow.
+            await finish_owned_task(asyncio.create_task(self._report_playback(session, event)))
+
+    async def _report_playback(self, session: _Session, event: PlaybackFact) -> None:
+        if str(session.response_id) != event.request_id:
+            session.failed.set()
+            raise ConversationBoundaryError()
+        sequence = session.event_sequence + 1
+        result = await self._request(
+            session,
+            "playback",
+            _Fact,
+            response_id=event.request_id,
+            event_sequence=sequence,
+            state=event.state.value.upper(),
+            generated_bytes=event.generated_bytes,
+            transport_accepted_bytes=event.transport_accepted_bytes,
+            terminal=event.state not in {PlaybackState.STARTED, PlaybackState.PARTIAL},
+        )
+        if result.response_id != session.response_id or result.event_sequence != sequence:
+            session.failed.set()
+            raise ConversationBoundaryError()
+        session.event_sequence = sequence
 
     async def call_ended(self, event: CallEnded) -> None:
         session = self.sessions.pop(event.call_id, None)

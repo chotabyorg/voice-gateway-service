@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from ..audio import PCM, validate_pcm
 from ..completion import bounded_call, deadline_timeout, finish_owned_task, observe_task
 from ..interfaces import BaseSTT, BaseTTS
-from ..speech_text import pronounce_byn
+from ..speech_text import pronounce_booking_values, pronounce_byn
 from ..observability import emit_event
 from ..vad import EnergyVAD, VADSettings
 
@@ -451,6 +451,9 @@ class SpeechKitTTS(BaseTTS):
             raise RuntimeError("SpeechKit TTS unavailable")
         if not isinstance(text, str):
             raise ValueError("Invalid SpeechKit TTS text")
+        # Every configured SpeechKit voice is Russian. Keep canonical replies intact;
+        # only the provider input uses spoken phone/date/clock/zone forms.
+        text = pronounce_booking_values(text)
         text = pronounce_byn(text) if self.settings.expand_byn else text
         if (
             not text.strip()

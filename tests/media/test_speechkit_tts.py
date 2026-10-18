@@ -101,6 +101,37 @@ async def test_prewarm_connects_once_before_first_answer(provider):
     assert len(channels) == 1
 
 
+async def test_booking_values_reach_provider_as_speech_without_changing_input(provider):
+    fake, connect, _ = provider
+    tts = SpeechKitTTS(SpeechKitTTSSettings("fixture", expand_byn=True), connection_factory=connect)
+    canonical = "19.10.2026 в 18:00 (Europe/Minsk), 22.00 BYN, контакт +375291112233."
+    try:
+        assert await tts.synthesize(canonical) == b"\x01\x00\x02\x00"
+        assert fake.requests[0][1].synthesis_input.text == (
+            "19 октября 2026 года в 18 часов по минскому времени, "
+            "22 белорусских рубля, контакт плюс три семь пять два девять один один один два два три три."
+        )
+        assert canonical == "19.10.2026 в 18:00 (Europe/Minsk), 22.00 BYN, контакт +375291112233."
+    finally:
+        await tts.close()
+
+
+@pytest.mark.parametrize("limit,count", [(30, 1), (4000, 50)])
+async def test_expanded_text_limits_are_checked_before_provider_connection(provider, limit, count):
+    _, connect, channels = provider
+    tts = SpeechKitTTS(
+        SpeechKitTTSSettings("fixture", max_text_chars=limit), connection_factory=connect
+    )
+    # The second case passes the character bound but exceeds the UTF-8 byte bound.
+    text = "+375291112233 " * count
+    try:
+        with pytest.raises(ValueError, match="text exceeds limit"):
+            await tts.synthesize(text)
+        assert not channels
+    finally:
+        await tts.close()
+
+
 async def test_first_pcm_precedes_completion_and_barge_in_cancels_rpc(provider):
     fake, connect, _ = provider
     fake.block = True

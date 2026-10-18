@@ -1,6 +1,6 @@
 import pytest
 
-from voice_gateway.media.speech_text import pronounce_byn
+from voice_gateway.media.speech_text import pronounce_booking_values, pronounce_byn
 
 
 @pytest.mark.parametrize(
@@ -23,3 +23,54 @@ from voice_gateway.media.speech_text import pronounce_byn
 )
 def test_byn_amounts(text, expected):
     assert pronounce_byn(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        (
+            "Контакт: +375291112233.",
+            "Контакт: плюс три семь пять два девять один один один два два три три.",
+        ),
+        ("+12025550123", "плюс один два ноль два пять пять пять ноль один два три"),
+        ("19.10 в 18:00", "19 октября в 18 часов"),
+        (
+            "19.10.2026 в 18:00 (Europe/Minsk).",
+            "19 октября 2026 года в 18 часов по минскому времени.",
+        ),
+        ("29.02.2028 в 01:01", "29 февраля 2028 года в 1 час 1 минуту"),
+        ("Время в 22:02", "Время в 22 часа 2 минуты"),
+        ("в 13:30", "в 13 часов 30 минут"),
+        ("в 00:00", "в 0 часов"),
+        ("В 21:21", "В 21 час 21 минуту"),
+        ("Дата 19.10.2026.", "Дата 19 октября 2026 года."),
+        ("Europe/Minsk", "по минскому времени"),
+        ("31.02.2026", "31.02.2026"),
+        ("29.02.2027", "29.02.2027"),
+        ("00.10.2026", "00.10.2026"),
+        ("19.13.2026", "19.13.2026"),
+        ("19.10 в 24:00", "19 октября в 24:00"),
+        ("в 12:60", "в 12:60"),
+        ("22.00 BYN, 12.01 BYN, 19.10", "22.00 BYN, 12.01 BYN, 19.10"),
+        ("Стоимость 12.01 в 18:00", "Стоимость 12.01 в 18 часов"),
+        ("Цена услуги: 12.01 в 18:00", "Цена услуги: 12.01 в 18 часов"),
+        ("BYN 12.01 в 18:00", "BYN 12.01 в 18 часов"),
+        ("123456789012, +1234567, +1234567890123456", "123456789012, +1234567, +1234567890123456"),
+        ("id+375291112233x, ++375291112233", "id+375291112233x, ++375291112233"),
+        ("версия 19.10.20260, id19.10.2026x", "версия 19.10.20260, id19.10.2026x"),
+        ("Europe/London, Other/Europe/Minsk/X", "Europe/London, Other/Europe/Minsk/X"),
+        ("Счёт 1:20, https://example.org", "Счёт 1:20, https://example.org"),
+    ],
+)
+def test_booking_values(text, expected):
+    assert pronounce_booking_values(text) == expected
+
+
+def test_booking_presentation_preserves_exact_money_and_is_idempotent():
+    canonical = "19.10 в 18:00, стоимость 22.01 BYN, контакт +375291112233. Подтверждаете?"
+    spoken = pronounce_byn(pronounce_booking_values(canonical))
+    assert spoken == (
+        "19 октября в 18 часов, стоимость 22 белорусских рубля 1 копейка, "
+        "контакт плюс три семь пять два девять один один один два два три три. Подтверждаете?"
+    )
+    assert pronounce_byn(pronounce_booking_values(spoken)) == spoken

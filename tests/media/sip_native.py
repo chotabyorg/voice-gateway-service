@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 
 
 def native():
+    """Expose a configurable compiled ceiling through a deterministic PJSUA2 fake."""
     pj = NS(events=deque(), calls=[], endpoints=[], registration_code=200, capacity=64)
     pj.PJSUA_INVALID_ID = -1
     pj.PJSIP_TRANSPORT_UDP = 1

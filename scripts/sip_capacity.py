@@ -17,6 +17,7 @@ progress = {"stage": "setup", "admitted": 0}
 
 
 async def main(count=5, waiting=2):
+    """Hold real local SIP calls, reject overflow, and verify bidirectional RTP."""
     loop = asyncio.get_running_loop()
     _, sip = await loop.create_datagram_endpoint(Peer, local_addr=("127.0.0.1", 0))
     config = SIPSettings(
@@ -37,6 +38,7 @@ async def main(count=5, waiting=2):
     received = {}
 
     async def handle(transport):
+        """Consume PCM and return synthetic audio without retaining recordings."""
         received[transport.call_id] = dict(bytes=0, nonzero=False)
         try:
             await transport.prepare()
@@ -76,6 +78,7 @@ async def main(count=5, waiting=2):
             call = {"id": call_id, "tag": tag, "uri": uri, "to": f"<{uri}>", "rtp": rtp}
 
             def request(method, cseq, body="", *, call=call, transaction_ack=False):
+                """Send one synthetic SIP request with the appropriate transaction branch."""
                 target_uri = call.get("contact", call["uri"])
                 branch = call["invite_branch"] if transaction_ack else "z9hG4bK" + uuid4().hex
                 if method == "INVITE":

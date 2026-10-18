@@ -57,7 +57,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/native-sip"
           "$RUNNER_TEMP/native-sip/bin/python" -m pip install setuptools==84.0.0 wheel==0.45.1
           bash scripts/build_pjsua2.sh "$RUNNER_TEMP/native-sip" "$RUNNER_TEMP/native-wheel"
-          sha256sum "$RUNNER_TEMP/native-wheel/"*.whl > "$RUNNER_TEMP/native-wheel/SHA256SUMS"
+          (cd "$RUNNER_TEMP/native-wheel" && sha256sum ./*.whl > SHA256SUMS)
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/native-wheel/SOURCE_REVISION"
       - name: Verify real simultaneous native SIP and RTP without providers
         run: |

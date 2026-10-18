@@ -8,6 +8,7 @@ import sys
 
 
 def main(output):
+    """Run bounded native processes and retain finite outcomes, including aborts."""
     trials = []
     for calls, waiting in ((5, 2), (8, 0)):
         try:

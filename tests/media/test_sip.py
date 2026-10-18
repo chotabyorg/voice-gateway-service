@@ -48,6 +48,7 @@ async def until(predicate):
 
 
 async def test_undersized_native_build_fails_before_registration_or_listening():
+    """An unsafe build must release its endpoint without admitting traffic."""
     pj = native()
     pj.capacity = 4
     client = SIPClient(settings(max_calls=5, max_waiting=2), None, Registry(), pj)
@@ -60,6 +61,7 @@ async def test_undersized_native_build_fails_before_registration_or_listening():
 
 
 async def test_native_capacity_includes_waiting_slots():
+    """Held callers count toward the native call ceiling."""
     pj = native()
     pj.capacity = 5
     client = SIPClient(settings(max_calls=5, max_waiting=1), None, Registry(), pj)
@@ -69,6 +71,7 @@ async def test_native_capacity_includes_waiting_slots():
 
 
 async def test_native_capacity_equal_to_call_and_waiting_limit_is_accepted():
+    """A sufficient build keeps the configured admission bound."""
     pj = native()
     pj.capacity = 7
     client = SIPClient(settings(max_calls=5, max_waiting=2), None, Registry(), pj)

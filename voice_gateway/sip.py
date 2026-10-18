@@ -302,6 +302,7 @@ class SIPClient:
         self.registered = self.stopping = False
 
     async def start(self):
+        """Validate native capacity before listening and registering with the PBX."""
         if self.pj is None:
             import pjsua2
 

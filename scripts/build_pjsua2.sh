@@ -23,7 +23,9 @@ make dep
 make -j1
 "$PYTHON" -c 'import setuptools, wheel'
 cd pjsip-apps/src/swig/python
-make wheel PYTHON_EXE="$PYTHON"
+# SWIG's large generated wrapper otherwise inherits Python's debug symbols,
+# which can exhaust a small host. Keep the native libraries optimized above.
+CFLAGS='-g0' CXXFLAGS='-g0' make wheel PYTHON_EXE="$PYTHON"
 "$PYTHON" -m pip install --no-deps dist/pjsua2-*.whl
 "$PYTHON" - <<'PY'
 import ctypes

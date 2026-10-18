@@ -18,6 +18,11 @@ _TIME = re.compile(
     r"(?P<prefix>\bв\s+)(?P<hour>[0-9]{1,2}):(?P<minute>[0-9]{2})(?![\w:])", re.IGNORECASE
 )
 _MINSK_ZONE = re.compile(r"\(Europe/Minsk\)|(?<![\w/])Europe/Minsk(?![\w/])")
+_PRICE_PREFIX = re.compile(
+    r"(?:\b(?:стоимость|цена|сумма|итого|оплата|стоит|ценой)\b[^0-9,.;:!?]{0,40}"
+    r"[:=—–-]?\s*|\b(?:BYN|USD|EUR|RUB)\s*)$",
+    re.IGNORECASE,
+)
 _DIGITS = ("ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять")
 _MONTHS = (
     "января",
@@ -71,6 +76,8 @@ def pronounce_booking_values(text: str) -> str:
     def calendar_date(match: re.Match[str]) -> str:
         day, month = int(match["day"]), int(match["month"])
         year = match["year"]
+        if year is None and _PRICE_PREFIX.search(text[max(0, match.start() - 64) : match.start()]):
+            return match[0]
         try:
             date(int(year) if year else 2000, month, day)
         except ValueError:

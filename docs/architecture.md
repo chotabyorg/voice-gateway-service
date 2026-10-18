@@ -58,7 +58,11 @@ Discarding a late suffix does not clear the wait for the caller's new answer.
 
 After a terminal playback fact is attempted, cancellation/cleanup cannot emit a
 different terminal fact for the same output: the original request may already
-have committed even if its acknowledgement was lost. Conversation boundary
+have committed even if its acknowledgement was lost. A playback POST already
+in flight also finishes its acknowledgement and local sequence update before
+propagating audio-producer cancellation. The existing HTTP request deadline
+bounds that wait; a lost acknowledgement fails the boundary without retrying
+with a conflicting fact. Audio remains revoked during this wait. Conversation boundary
 diagnostics report only the operation, validation stage and HTTP status, never
 payloads or exception details. A failed AI turn can receive a Conversation-owned
 authorized failure response using the existing protocol, keeping media active;

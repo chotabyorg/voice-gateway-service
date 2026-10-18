@@ -1,9 +1,13 @@
 """Finish an owned cleanup task before propagating caller cancellation."""
 
 import asyncio
+from collections.abc import Coroutine
+from typing import Any, TypeVar
+
+Result = TypeVar("Result")
 
 
-def deadline_timeout(deadline):
+def deadline_timeout(deadline: float) -> asyncio.Timeout:
     """Bound one awaited operation; never keep this context across a stream yield.
 
     Check expiry synchronously too: an immediately available next chunk must not
@@ -14,12 +18,14 @@ def deadline_timeout(deadline):
     return asyncio.timeout_at(deadline)
 
 
-def observe_task(task):
+def observe_task(task: asyncio.Task[Any]) -> None:
     if not task.cancelled():
         task.exception()
 
 
-async def bounded_call(awaitable, *, timeout, cancellation_grace=0.1):
+async def bounded_call(
+    awaitable: Coroutine[Any, Any, object], *, timeout: float, cancellation_grace: float = 0.1
+) -> bool:
     """Run cleanup without letting cancellation-resistant code hold shutdown forever."""
     task = asyncio.create_task(awaitable)
     try:
@@ -44,12 +50,15 @@ async def bounded_call(awaitable, *, timeout, cancellation_grace=0.1):
     return True
 
 
-async def finish_owned_task(task, *, cancellation=None):
+async def finish_owned_task(
+    task: asyncio.Task[Result], *, cancellation: asyncio.CancelledError | None = None
+) -> Result:
     while not task.done():
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError as exc:
-            if asyncio.current_task().cancelling():
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
                 cancellation = cancellation or exc
             if task.done():
                 break

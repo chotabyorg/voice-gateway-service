@@ -72,7 +72,7 @@ async def test_missing_followup_final_releases_request_at_bounded_deadline(monke
 
 
 @pytest.mark.parametrize("coverage", [None, 100.5])
-async def test_no_extra_hold_without_uncovered_speech(monkeypatch, coverage):
+async def test_quiet_request_has_only_bounded_final_arrival_grace(monkeypatch, coverage):
     clock = SimpleNamespace(now=101.0)
     monkeypatch.setattr(utterances, "time", SimpleNamespace(monotonic=lambda: clock.now))
     delivered = asyncio.Event()
@@ -85,7 +85,40 @@ async def test_no_extra_hold_without_uncovered_speech(monkeypatch, coverage):
     try:
         coordinator.speech(ended_at=100.5)
         await coordinator.submit(REQUEST, speech_ended_at=coverage)
+        clock.now = 101.31
+        coordinator.changed.set()
         await asyncio.wait_for(delivered.wait(), 0.2)
+    finally:
+        await coordinator.close()
+
+
+async def test_speech_starting_after_quick_final_joins_before_dispatch(monkeypatch):
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(utterances, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    seen = []
+    delivered = asyncio.Event()
+
+    async def callback(text):
+        seen.append(text)
+        delivered.set()
+
+    coordinator = utterances.UtteranceCoordinator(callback, silence_seconds=0.5)
+    try:
+        coordinator.speech(ended_at=99.0)
+        await coordinator.submit(REQUEST, speech_ended_at=99.0)
+        await asyncio.sleep(0)
+        assert seen == []
+        clock.now = 100.2
+        coordinator.speech(ended_at=100.2)
+        clock.now = 100.8
+        coordinator.changed.set()
+        await asyncio.sleep(0)
+        assert seen == []
+        await coordinator.submit(CONTACT, speech_ended_at=100.2)
+        clock.now = 104.0
+        coordinator.changed.set()
+        await asyncio.wait_for(delivered.wait(), 0.2)
+        assert seen == [REQUEST + " " + CONTACT]
     finally:
         await coordinator.close()
 

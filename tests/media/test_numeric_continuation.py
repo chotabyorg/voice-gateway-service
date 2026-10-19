@@ -59,14 +59,19 @@ async def test_numeric_final_waits_the_longer_window():
 
 
 @pytest.mark.asyncio
-async def test_plain_final_has_no_extra_window():
+@pytest.mark.parametrize(
+    "silence,has_coverage,expected", [(0.3, True, 0.3), (0.05, True, 0.05), (0.3, False, 0)]
+)
+async def test_plain_final_has_bounded_arrival_window(silence, has_coverage, expected):
     async def callback(text):
         return None
 
-    coordinator = UtteranceCoordinator(callback, silence_seconds=0.3, continuation_seconds=0.9)
+    coordinator = UtteranceCoordinator(callback, silence_seconds=silence, continuation_seconds=0.9)
     now = time.monotonic()
-    await coordinator.submit("Сколько стоит маникюр?", speech_ended_at=now)
-    assert coordinator.deadline - now <= 0.01
+    await coordinator.submit(
+        "Сколько стоит маникюр?", speech_ended_at=now if has_coverage else None
+    )
+    assert expected - 1e-6 <= coordinator.deadline - now <= expected + 0.01
     await coordinator.close()
 
 

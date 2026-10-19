@@ -151,7 +151,10 @@ class UtteranceCoordinator:
             window = self.continuation_seconds
             self.short_phone_speech_at = None
         else:
-            window = 0
+            # A quick provider final can precede the caller's next acoustic
+            # fragment. Give observed continuations a short chance to arrive;
+            # adapters without coverage metadata retain their existing policy.
+            window = min(self.silence_seconds, 0.3) if speech_ended_at is not None else 0
             self.short_phone_speech_at = None
         self.deadline = time.monotonic() + window
         self.changed.set()

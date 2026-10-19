@@ -52,8 +52,10 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    Speech newer than the acoustic timestamp covered by a pending final restores
    the numeric wait while recognition catches up. This also keeps a request
    together with a subsequently dictated contact, including speech observed
-   before the delayed request final. A final covering the latest speech keeps
-   its normal window; there is no additional hold for a quiet ordinary request.
+   before the delayed request final. An ordinary final with an acoustic timestamp
+   also waits up to 300 ms after arrival (capped by the configured silence window),
+   allowing a quick final to meet a just-starting continuation. This is an explicit
+   quiet-response latency cost; a missing continuation cannot extend it further.
    Adapters without acoustic-final timestamps retain the existing phone heuristic.
    Batch and SpeechKit speech timestamps never move backwards across packet
    bursts, so a final cannot appear older than speech it already covers.

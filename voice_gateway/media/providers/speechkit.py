@@ -292,9 +292,14 @@ class SpeechKitSTT(BaseSTT):
         if full_data:
             if not utterance.confirmed:
                 raise RuntimeError("SpeechKit recovery requires a local endpoint")
-            for offset in range(0, len(utterance.retained), 65536):
+            # The channel's 65536-byte limit includes the protobuf envelope.
+            # Keep PCM chunks frame-aligned with room for message overhead.
+            chunk_bytes = 64000
+            for offset in range(0, len(utterance.retained), chunk_bytes):
                 yield p.StreamingRequest(
-                    chunk=p.AudioChunk(data=bytes(utterance.retained[offset : offset + 65536]))
+                    chunk=p.AudioChunk(
+                        data=bytes(utterance.retained[offset : offset + chunk_bytes])
+                    )
                 )
             yield p.StreamingRequest(eou=p.Eou())
             return

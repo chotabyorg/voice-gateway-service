@@ -74,7 +74,9 @@ async def recovery_provider():
     channels = []
 
     def connect():
-        channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+        channel = grpc.aio.insecure_channel(
+            f"127.0.0.1:{port}", options=(("grpc.max_send_message_length", 65536),)
+        )
         channels.append(channel)
         return channel, service.RecognizerStub(channel)
 
@@ -141,6 +143,33 @@ async def test_transient_stt_error_keeps_media_call_and_admits_one_complete_utte
 async def completed_utterance(stt, amplitude=1800):
     await stt.feed_audio(pcm(amplitude, 200))
     await stt.feed_audio(pcm(0, 500))
+
+
+async def test_long_recovery_respects_serialized_grpc_message_limit(recovery_provider):
+    fake, connect = recovery_provider
+    finals = []
+
+    async def final(text):
+        finals.append(text)
+
+    stt = SpeechKitSTT(SpeechKitSettings("fixture-secret"), connection_factory=connect)
+    await stt.start_stream(on_final=final)
+    try:
+        await stt.feed_audio(pcm(1800, 200))
+        await asyncio.wait_for(fake.closed.wait(), 1)
+        for _ in range(3):
+            await stt.feed_audio(pcm(1800, 2000))
+        await stt.feed_audio(pcm(0, 500))
+        await wait_until(lambda: finals or stt._error)
+        assert finals == ["fixture 1"] and not stt._error
+        replay = fake.requests[1]
+        assert all(request.ByteSize() <= 65536 for request in replay)
+        assert b"".join(r.chunk.data for r in replay if r.WhichOneof("Event") == "chunk") == (
+            pcm(1800, 6200) + pcm(0, 500)
+        )
+    finally:
+        await stt.abort_stream()
+    assert not stt._tasks and not stt._rpcs
 
 
 @pytest.mark.parametrize("final_before_error", [False, True])

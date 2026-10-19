@@ -21,6 +21,12 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    validates the UUID handshake, frame size, sample rate and PCM sample alignment.
    SIP validates the configured PBX peer and called DID, then shares the same
    call owner and PCM pipeline. See [live runtime](live-runtime.md).
+   Structured SIP diagnostics retain the inbound decision/status, registration
+   state and disconnect phase flags, including whether Voice requested a local
+   hangup. Native reason phrases, SIP messages, addresses and phone numbers are
+   excluded. A local-request flag records an attempt, not delivery of a BYE;
+   its absence does not identify which upstream party ended a call. Diagnostics
+   are best-effort and cannot alter admission or cleanup.
 2. `BatchSTT` keeps a bounded acoustic utterance in memory, applies energy VAD
    and end-of-speech, limits provider concurrency/backlog, and returns a final
    transcript through a callback. Optional SpeechKit v3 instead streams audio

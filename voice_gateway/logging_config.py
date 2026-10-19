@@ -42,6 +42,13 @@ class JsonFormatter(logging.Formatter):
         "sequence",
         "playback_state",
         "call_end_reason",
+        "sip_status",
+        "sip_reason",
+        "registered",
+        "confirmed",
+        "session_started",
+        "media_ready",
+        "local_hangup_requested",
     )
 
     def format(self, record):

@@ -1,6 +1,7 @@
 """Native loopback gRPC contract: streaming, local EOU, ordering and cleanup."""
 
 import asyncio
+from types import SimpleNamespace
 
 import grpc
 import pytest
@@ -14,6 +15,7 @@ from voice_gateway.media.providers.speechkit import (
     _Utterance,
 )
 from voice_gateway.media.vad import VADSettings
+from voice_gateway.media.providers import speechkit
 
 
 class Recognizer(service.RecognizerServicer):
@@ -109,6 +111,30 @@ async def wait_until(predicate):
 async def utterance(stt):
     await stt.feed_audio(pcm(1800, 200))
     await stt.feed_audio(pcm(0, 500))
+
+
+async def test_burst_packet_cannot_move_final_speech_clock_backwards(provider, monkeypatch):
+    monkeypatch.setattr(speechkit, "time", SimpleNamespace(monotonic=lambda: 100.0))
+    fake, connect = provider
+    stt = SpeechKitSTT(SpeechKitSettings("fixture-secret"), connection_factory=connect)
+    finals = []
+
+    async def final(text):
+        finals.append((text, stt.final_speech_at))
+
+    await stt.start_stream(on_final=final)
+    try:
+        await stt.feed_audio(pcm(1000, 200))
+        observed = stt.last_speech_at
+        await stt.feed_audio(pcm(1000, 200) + pcm(0, 500))
+        assert stt.last_speech_at == observed
+        await wait_until(lambda: finals)
+        assert finals == [("fixture 0", observed)]
+        data = b"".join(r.chunk.data for r in fake.requests[0] if r.WhichOneof("Event") == "chunk")
+        assert data == pcm(1000, 400) + pcm(0, 500)
+    finally:
+        await stt.abort_stream()
+    assert not stt._tasks and not stt._rpcs
 
 
 async def test_audio_streams_during_speech_but_only_confirmed_final_is_admitted(provider):

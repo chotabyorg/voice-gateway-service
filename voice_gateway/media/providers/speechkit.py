@@ -209,7 +209,12 @@ class SpeechKitSTT(BaseSTT):
             frame = audio[offset:frame_end]
             ready = self.vad.feed(frame)
             if self.vad.has_speech and self.vad.silence_ms == 0:
-                self.last_speech_at = received_at - (len(audio) - frame_end) / PCM.bytes_per_second
+                ended_at = received_at - (len(audio) - frame_end) / PCM.bytes_per_second
+                # Packet bursts must not move final coverage behind speech
+                # already observed by the acoustic coordinator.
+                self.last_speech_at = max(
+                    ended_at, self.last_speech_at if self.last_speech_at is not None else ended_at
+                )
             if self._current is None and self.vad.speech_ms >= self.vad.settings.min_speech_ms:
                 if self._pending_count >= self.settings.max_pending:
                     raise RuntimeError("SpeechKit utterance backlog exceeded")

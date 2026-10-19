@@ -2,12 +2,14 @@
 
 import asyncio
 import struct
+from types import SimpleNamespace
 
 import pytest
 
 from tests.media.media_fakes import pcm
 from voice_gateway.media.batch_stt import BatchSTT, BatchSTTSettings
 from voice_gateway.media.vad import VADSettings
+from voice_gateway.media import batch_stt
 
 
 class CapturingSTT(BatchSTT):
@@ -18,6 +20,27 @@ class CapturingSTT(BatchSTT):
     async def _transcribe(self, audio):
         self.audio.append(audio)
         return "offline fixture"
+
+
+async def test_burst_packet_cannot_move_final_speech_clock_backwards(monkeypatch):
+    monkeypatch.setattr(batch_stt, "time", SimpleNamespace(monotonic=lambda: 100.0))
+    stt = CapturingSTT()
+    finals = []
+
+    async def final(text):
+        finals.append((text, stt.final_speech_at))
+
+    await stt.start_stream(on_final=final)
+    try:
+        await stt.feed_audio(pcm(1000, 200))
+        observed = stt.last_speech_at
+        await stt.feed_audio(pcm(1000, 200) + pcm(0, 500))
+        assert stt.last_speech_at == observed
+        await stt.stop_stream()
+        assert finals == [("offline fixture", observed)]
+        assert stt.audio == [pcm(1000, 400) + pcm(0, 500)]
+    finally:
+        await stt.abort_stream()
 
 
 async def transcribe(audio, packet_bytes):

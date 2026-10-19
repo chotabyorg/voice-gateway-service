@@ -49,8 +49,16 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    Partial numbers, other countries, alternatives, extensions and corrections
    keep the 2.5-second numeric window, including long explicit phone fragments.
    Ongoing speech still postpones delivery; closure fences pending finals.
-   Speech newer than a complete phone final restores the numeric wait while
-   recognition catches up, including speech observed before a delayed final.
+   Speech newer than the acoustic timestamp covered by a pending final restores
+   the numeric wait while recognition catches up. This also keeps a request
+   together with a subsequently dictated contact, including speech observed
+   before the delayed request final. An ordinary final with an acoustic timestamp
+   also waits up to 300 ms after arrival (capped by the configured silence window),
+   allowing a quick final to meet a just-starting continuation. This is an explicit
+   quiet-response latency cost; a missing continuation cannot extend it further.
+   Adapters without acoustic-final timestamps retain the existing phone heuristic.
+   Batch and SpeechKit speech timestamps never move backwards across packet
+   bursts, so a final cannot appear older than speech it already covers.
    This fallback uses the existing bounded numeric window after the latest
    detected speech; the normal final-arrival hold still applies.
 4. `VoiceToConversationPort` is the typed local seam for call start/end, final

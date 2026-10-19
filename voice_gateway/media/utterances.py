@@ -110,6 +110,7 @@ class UtteranceCoordinator:
         self.closed = False
         self.pending_speech_at = None
         self.dispatched_speech_at = None
+        self.short_phone_speech_at = None
 
     def speech(self, *, ended_at=None):
         self.last_speech = time.monotonic() if ended_at is None else ended_at
@@ -140,12 +141,18 @@ class UtteranceCoordinator:
         combined = " ".join(self.pending)
         if complete_phone_dictation(combined):
             window = self.continuation_seconds
+            self.short_phone_speech_at = (
+                self.last_speech if speech_ended_at is None else speech_ended_at
+            )
         elif numeric_dictation(text) or phone_dictation_fragment(combined):
             window = self.numeric_continuation_seconds
+            self.short_phone_speech_at = None
         elif likely_unfinished(text):
             window = self.continuation_seconds
+            self.short_phone_speech_at = None
         else:
             window = 0
+            self.short_phone_speech_at = None
         self.deadline = time.monotonic() + window
         self.changed.set()
         if self.task is None or self.task.done():
@@ -154,7 +161,15 @@ class UtteranceCoordinator:
     async def _run(self):
         while self.pending and not self.closed:
             self.changed.clear()
-            delay = max(self.deadline, self.last_speech + self.silence_seconds) - time.monotonic()
+            deadline = max(self.deadline, self.last_speech + self.silence_seconds)
+            if (
+                self.short_phone_speech_at is not None
+                and self.last_speech > self.short_phone_speech_at
+            ):
+                # New speech may be an unrecognized correction. VAD silence is
+                # not evidence that its final transcript has already arrived.
+                deadline = max(deadline, self.last_speech + self.numeric_continuation_seconds)
+            delay = deadline - time.monotonic()
             if delay > 0:
                 try:
                     await asyncio.wait_for(self.changed.wait(), delay)
@@ -163,6 +178,7 @@ class UtteranceCoordinator:
                     continue
             text, self.pending = " ".join(self.pending), []
             self.pending_chars = 0
+            self.short_phone_speech_at = None
             self.space.set()
             self.dispatched_speech_at = self.pending_speech_at
             self.pending_speech_at = None
@@ -181,6 +197,7 @@ class UtteranceCoordinator:
         self.pending.clear()
         self.pending_chars = 0
         self.pending_speech_at = None
+        self.short_phone_speech_at = None
         self.space.set()
         if self.task:
             self.task.cancel()

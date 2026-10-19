@@ -120,3 +120,25 @@ def phone_dictation_fragment(text):
         return False
     tail = text[marker.end() :].casefold()
     return bool(re.search(r"[0-9]|\b(?:" + "|".join(_NUMBER_WORDS) + r")\b", tail))
+
+
+def complete_phone_suffix(text):
+    """Use the existing short hold when a bounded request ends in one full phone.
+
+    A preceding request may contain dates or times, unlike the short name/contact
+    prefix accepted by complete_phone_dictation. The same strict phone parser and
+    whole-input correction/ambiguity checks still apply. Nothing is rewritten or
+    treated as a validated contact, business intent or execution permission.
+    """
+    if not isinstance(text, str) or len(text) > 512:
+        return False
+    text = unicodedata.normalize("NFC", " ".join(text.casefold().split())).rstrip(".!?")
+    if _UNCERTAIN.search(text):
+        return False
+    markers = list(_PLUS.finditer(text))
+    if len(markers) != 1:
+        return False
+    marker = markers[0]
+    if not re.fullmatch(r"[а-яёіўa-z0-9\s,.:;!?-]*", text[: marker.start()]):
+        return False
+    return complete_phone_dictation(text[marker.start() :])

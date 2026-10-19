@@ -301,6 +301,31 @@ class SIPClient:
         self.registration = asyncio.Event()
         self.registered = self.stopping = False
 
+    def _diagnostic(self, event, *, call=None, status=None, reason=None, info=None):
+        """Best-effort fixed metadata; native reason phrases and SIP are excluded."""
+        try:
+            if info is not None:
+                status = getattr(info, "lastStatusCode", None)
+            fields = {
+                "event": event,
+                "sip_reason": reason,
+                "registered": self.registered,
+                "call_count": len(self.calls),
+            }
+            if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 699:
+                fields["sip_status"] = status
+            if call is not None:
+                fields.update(
+                    confirmed=call.confirmed,
+                    session_started=call.session_started,
+                    media_ready=bool(call.transport and call.transport.ready.is_set()),
+                    local_hangup_requested=call.local_hangup_requested,
+                )
+            logger.info(event, extra=fields)
+        except Exception:
+            # Diagnostics cannot change admission, native callbacks or cleanup.
+            pass
+
     async def start(self):
         """Validate native capacity before listening and registering with the PBX."""
         if self.pj is None:
@@ -383,6 +408,7 @@ class SIPClient:
         class Account(pj.Account):
             def onRegState(self, prm):
                 client.registered = bool(self.getInfo().regIsActive and 200 <= prm.code < 300)
+                client._diagnostic("sip_registration_state", status=prm.code)
                 if prm.code >= 200:
                     client.registration.set()
 
@@ -394,6 +420,7 @@ class SIPClient:
                 super().__init__(client.account, call_id)
                 self.transport = None
                 self.confirmed = self.finished = self.running = self.session_started = False
+                self.local_hangup_requested = False
                 self.media = None
 
             def onCallTransferRequest(self, prm):
@@ -403,11 +430,14 @@ class SIPClient:
                 prm.statusCode = 603
 
             def onCallState(self, prm):
-                state = self.getInfo().state
+                info = self.getInfo()
+                state = info.state
                 if state == pj.PJSIP_INV_STATE_CONFIRMED:
                     self.confirmed = True
                     client._maybe_session(self)
                 elif state == pj.PJSIP_INV_STATE_DISCONNECTED:
+                    if not self.finished:
+                        client._diagnostic("sip_call_disconnected", call=self, info=info)
                     self.finished = True
                     if self.transport:
                         self.transport.remote_closed()
@@ -498,25 +528,35 @@ class SIPClient:
         options = self.pj.CallOpParam()
         options.opt.audioCount, options.opt.videoCount = 1, 0
         options.statusCode = 486
+        reason = "stopping" if self.stopping else "registration_unavailable"
         try:
             if not self.stopping and self.registered:
+                reason = "capacity"
                 queued = self.capacity is not None
                 # Without a queue callback the adapter keeps its fixed admission
                 # bound; with one it also answers a few callers to hold them.
                 limit = self.settings.max_calls + (self.settings.max_waiting if queued else 0)
                 if len(self.calls) <= limit:
+                    reason = "request_rejected"
                     number = called_did(self.settings, received)
+                    reason = "setup_failed"
                     transport = SIPTransport(self, call)
                     transport.caller_number = caller_ani(received, number)
                     transport.queued = queued and not self.capacity()
+                    reason = "route_registration_rejected"
                     self.registry.register(Registration(call_id=transport.call_id, number=number))
                     call.transport = transport
                     options.statusCode = 200
+                    reason = "queued" if transport.queued else "accepted"
         except Exception:
             options.statusCode = 403
+        self._diagnostic(
+            "sip_inbound_decision", call=call, status=options.statusCode, reason=reason
+        )
         try:
             call.answer(options)
         except Exception:
+            self._diagnostic("sip_answer_failed", call=call, status=options.statusCode)
             if call.transport:
                 call.transport.remote_closed()
             call.finished = True
@@ -582,6 +622,9 @@ class SIPClient:
         try:
             options = self.pj.CallOpParam()
             options.statusCode = 603
+            if not call.local_hangup_requested:
+                call.local_hangup_requested = True
+                self._diagnostic("sip_local_hangup_requested", call=call, status=603)
             call.hangup(options)
         except Exception:
             logger.warning("sip_hangup_failed")

@@ -63,6 +63,23 @@ class _Identity(BaseModel):
 Response = TypeVar("Response", bound=_Identity)
 
 
+def _failure_kind(error: Exception) -> str:
+    # A closed vocabulary only; exceptions may contain tokens, URLs or bodies.
+    for error_type, kind in (
+        (TimeoutError, "DEADLINE"),
+        (httpx.ReadTimeout, "READ_TIMEOUT"),
+        (httpx.WriteTimeout, "WRITE_TIMEOUT"),
+        (httpx.ConnectTimeout, "CONNECT_TIMEOUT"),
+        (httpx.PoolTimeout, "POOL_TIMEOUT"),
+        (httpx.NetworkError, "NETWORK"),
+        (httpx.ProtocolError, "PROTOCOL"),
+        (httpx.TransportError, "TRANSPORT"),
+    ):
+        if isinstance(error, error_type):
+            return kind
+    return "INVALID_OR_OTHER"
+
+
 class _Call(_Identity):
     conversation_id: UUID
     state: Literal["ACTIVE", "ENDED", "EXPIRED"]
@@ -166,31 +183,44 @@ class ConversationHTTPPort(StreamingConversationPort):
     ) -> Response:
         stage = "TRANSPORT"
         status: int | None = None
+        body_json = {**session.identity(), **payload}
         try:
             async with asyncio.timeout(self.timeout):
-                async with self.client.stream(
-                    "POST",
-                    "/internal/v1/voice/" + path,
-                    json={**session.identity(), **payload},
-                ) as response:
-                    stage, status = "HTTP_STATUS", response.status_code
-                    if response.status_code != 200:
-                        raise ConversationBoundaryError()
-                    stage = "HEADERS"
-                    media = response.headers.get_list("content-type")
-                    encoding = response.headers.get_list("content-encoding")
-                    if (
-                        len(media) != 1
-                        or media[0].split(";", 1)[0].strip().lower() != "application/json"
-                        or any(v.lower() != "identity" for v in encoding)
-                    ):
-                        raise ConversationBoundaryError()
-                    body = bytearray()
-                    stage = "BODY"
-                    async for chunk in response.aiter_bytes():
-                        if len(body) + len(chunk) > 65536:
-                            raise ConversationBoundaryError()
-                        body.extend(chunk)
+                for attempt in range(2 if path == "playback" else 1):
+                    stage, status = "TRANSPORT", None
+                    try:
+                        async with self.client.stream(
+                            "POST", "/internal/v1/voice/" + path, json=body_json
+                        ) as response:
+                            stage, status = "HTTP_STATUS", response.status_code
+                            if response.status_code != 200:
+                                raise ConversationBoundaryError()
+                            stage = "HEADERS"
+                            media = response.headers.get_list("content-type")
+                            encoding = response.headers.get_list("content-encoding")
+                            if (
+                                len(media) != 1
+                                or media[0].split(";", 1)[0].strip().lower() != "application/json"
+                                or any(v.lower() != "identity" for v in encoding)
+                            ):
+                                raise ConversationBoundaryError()
+                            body = bytearray()
+                            stage = "BODY"
+                            async for chunk in response.aiter_bytes():
+                                if len(body) + len(chunk) > 65536:
+                                    raise ConversationBoundaryError()
+                                body.extend(chunk)
+                    except httpx.TransportError as error:
+                        if path != "playback" or attempt != 0:
+                            raise
+                        # Conversation replays an identical fact by response and
+                        # sequence. Never change its bytes or extend the deadline;
+                        # lost send permission and other commands cannot use this.
+                        logger.warning(
+                            "conversation_playback_transport_retry kind=%s", _failure_kind(error)
+                        )
+                        continue
+                    break
                 stage = "VALIDATION"
                 result = response_type.model_validate(
                     json.loads(
@@ -208,7 +238,7 @@ class ConversationHTTPPort(StreamingConversationPort):
                 return result
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             # Closed operation names and stage/status only: no payload, token,
             # customer text, response body or exception representation.
             logger.warning(
@@ -216,6 +246,9 @@ class ConversationHTTPPort(StreamingConversationPort):
                 path,
                 stage,
                 status,
+            )
+            logger.warning(
+                "conversation_boundary_cause operation=%s kind=%s", path, _failure_kind(error)
             )
             session.failed.set()
             raise ConversationBoundaryError() from None

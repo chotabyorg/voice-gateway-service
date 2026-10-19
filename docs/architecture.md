@@ -96,9 +96,14 @@ different terminal fact for the same output: the original request may already
 have committed even if its acknowledgement was lost. A playback POST already
 in flight also finishes its acknowledgement and local sequence update before
 propagating audio-producer cancellation. The existing HTTP request deadline
-bounds that wait; a lost acknowledgement fails the boundary without retrying
-with a conflicting fact. Audio remains revoked during this wait. Conversation boundary
-diagnostics report only the operation, validation stage and HTTP status, never
+bounds that wait. A transport exception allows one repeat of exactly the same
+playback fact, including its sequence and byte counters, inside that original
+deadline. Conversation's existing fingerprint validation replays the identical
+committed fact without another delivery effect. HTTP errors, invalid replies and
+other commands, including send permission, are not retried. An exhausted deadline
+or second failure still fails the boundary without a conflicting fact. Audio
+remains revoked during this wait. Conversation boundary diagnostics report only
+the operation, validation stage, HTTP status and closed failure category, never
 payloads or exception details. A failed AI turn can receive a Conversation-owned
 authorized failure response using the existing protocol, keeping media active;
 Voice does not choose that text or retry the business action.

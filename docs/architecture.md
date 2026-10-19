@@ -27,6 +27,14 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    during speech over one bounded RPC per acoustic utterance. The same local
    VAD confirms the endpoint; only ordered final transcripts reach the callback.
    Provider partials and provider endpoint hints cannot grant a turn.
+   A failed, still unadmitted utterance can make one additional recognition RPC
+   after the local endpoint, using `FULL_DATA` on the same SpeechKit connection.
+   This covers `UNAVAILABLE`, provider `DEADLINE_EXCEEDED`, `INTERNAL`, and an EOF
+   before the local endpoint. Known credential, quota and invalid-request errors
+   are not retried. The original final deadline bounds both attempts, including
+   the small jittered backoff; callback failure cannot replay accepted text.
+   Recovery PCM is memory-only, shares the acoustic byte limit, and is erased on
+   recognition completion, failure or cancellation. No prior utterance is replayed.
 3. `UtteranceCoordinator` can combine closely spaced acoustic finals. It is a
    media heuristic; it does not schedule or own a Main Chota `AgentTurn`.
 4. `VoiceToConversationPort` is the typed local seam for call start/end, final

@@ -1,11 +1,14 @@
 """SpeechKit v3 streaming on telephone PCM; local VAD owns utterance boundaries.
 
-One TLS channel per call, one bounded RPC per acoustic utterance. Audio is sent
+One TLS channel per call, normally one bounded RPC per acoustic utterance. Audio is sent
 while the caller speaks; only locally confirmed finals reach Conversation.
 No partial transcript, provider EOU, retry or alternate provider grants a turn.
+One transient recognition failure may retry the same unadmitted, locally ended
+utterance in FULL_DATA mode. The original final deadline still bounds recovery.
 """
 
 import asyncio
+import random
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -50,10 +53,51 @@ class SpeechKitSettings:
 @dataclass
 class _Utterance:
     audio: asyncio.Queue
+    retained: bytearray = field(default_factory=bytearray, repr=False)
+    endpoint: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    recovering: bool = False
     confirmed: bool = False
     endpoint_at: float = 0
     speech_at: float | None = None
     task: asyncio.Task | None = None
+
+
+class _SpeechKitEarlyClose(RuntimeError):
+    """Provider EOF before the local acoustic boundary, with no admitted text."""
+
+
+def _error_category(exc):
+    """Closed diagnostic vocabulary; never inspect provider details or metadata."""
+    import grpc
+
+    if isinstance(exc, grpc.aio.AioRpcError):
+        status = exc.code()
+        return "AioRpcError", status.name if isinstance(status, grpc.StatusCode) else "UNKNOWN"
+    if isinstance(exc, _SpeechKitEarlyClose):
+        return "SpeechKitEarlyClose", "UNKNOWN"
+    for kind in (TimeoutError, ValueError, RuntimeError):
+        if isinstance(exc, kind):
+            return kind.__name__, "UNKNOWN"
+    return "OtherError", "UNKNOWN"
+
+
+def _can_recover(exc):
+    # Recognition has no business effect and no text escapes until the RPC ends.
+    # Known quota, credential and invalid-request statuses are not transient;
+    # application callback failures never enter the recognition retry path.
+    # INTERNAL also covers an early C-core stream failure during concurrent
+    # writes; a single read-only recognition retry remains bounded and local.
+    import grpc
+
+    return isinstance(exc, _SpeechKitEarlyClose) or (
+        isinstance(exc, grpc.aio.AioRpcError)
+        and exc.code()
+        in {
+            grpc.StatusCode.UNAVAILABLE,
+            grpc.StatusCode.DEADLINE_EXCEEDED,
+            grpc.StatusCode.INTERNAL,
+        }
+    )
 
 
 def _connection():
@@ -109,19 +153,33 @@ class SpeechKitSTT(BaseSTT):
         self._pending_frame = b""
         self.vad.reset()
 
-    def _own(self, task):
+    def _own(self, task, *, operation):
         self._tasks.add(task)
 
         def done(completed):
             self._tasks.discard(completed)
             if not completed.cancelled() and completed.exception() is not None:
                 self._error = True
-                self.emit("stt_transcribe_error", error_type="SpeechKitStreamError")
+                error_type, status = _error_category(completed.exception())
+                self.emit(
+                    "stt_transcribe_error",
+                    error_type=error_type,
+                    provider_status=status,
+                    operation=operation,
+                )
 
         task.add_done_callback(done)
         return task
 
     def _enqueue(self, utterance, chunk):
+        if chunk is not None and len(utterance.retained) + len(chunk) > self.vad.max_buffer_bytes:
+            raise RuntimeError("SpeechKit recovery audio exceeds configured byte limit")
+        if utterance.recovering:
+            # The failed sender is gone; FULL_DATA will read the bounded retained
+            # PCM after the endpoint. Do not fill a queue that has no consumer.
+            if chunk is not None:
+                utterance.retained.extend(chunk)
+            return
         try:
             utterance.audio.put_nowait(chunk)
         except asyncio.QueueFull:
@@ -131,6 +189,8 @@ class SpeechKitSTT(BaseSTT):
                 limit=self.settings.max_audio_queue_frames,
             )
             raise RuntimeError("SpeechKit audio backlog exceeded") from None
+        if chunk is not None:
+            utterance.retained.extend(chunk)
 
     async def feed_audio(self, chunk):
         if not self._accepting or self._error:
@@ -161,7 +221,9 @@ class SpeechKitSTT(BaseSTT):
                 for buffered in self.vad.buffer:
                     for n in range(0, len(buffered), PCM.frame_bytes):
                         self._enqueue(utterance, buffered[n : n + PCM.frame_bytes])
-                utterance.task = self._own(asyncio.create_task(self._recognize(utterance)))
+                utterance.task = self._own(
+                    asyncio.create_task(self._recognize(utterance)), operation="recognize"
+                )
                 self.emit("stt_stream_started")
             elif self._current is not None:
                 self._enqueue(self._current, frame)
@@ -177,8 +239,11 @@ class SpeechKitSTT(BaseSTT):
             utterance.endpoint_at = time.monotonic()
             utterance.speech_at = self.last_speech_at
             self._enqueue(utterance, None)
+            utterance.endpoint.set()
             previous = self._previous
-            self._previous = self._own(asyncio.create_task(self._finish(utterance, previous)))
+            self._previous = self._own(
+                asyncio.create_task(self._finish(utterance, previous)), operation="deliver"
+            )
             self.emit(
                 "stt_endpoint",
                 audio_ms=round(self.vad.buffer_ms),
@@ -190,7 +255,7 @@ class SpeechKitSTT(BaseSTT):
             )
         self.vad.reset()
 
-    async def _requests(self, utterance):
+    async def _requests(self, utterance, *, full_data=False):
         from yandex.cloud.ai.stt.v3 import stt_pb2 as p
 
         yield p.StreamingRequest(
@@ -213,13 +278,26 @@ class SpeechKitSTT(BaseSTT):
                         restriction_type=p.LanguageRestrictionOptions.WHITELIST,
                         language_code=[self.settings.language],
                     ),
-                    audio_processing_type=p.RecognitionModelOptions.REAL_TIME,
+                    audio_processing_type=(
+                        p.RecognitionModelOptions.FULL_DATA
+                        if full_data
+                        else p.RecognitionModelOptions.REAL_TIME
+                    ),
                 ),
                 eou_classifier=p.EouClassifierOptions(
                     external_classifier=p.ExternalEouClassifier()
                 ),
             )
         )
+        if full_data:
+            if not utterance.confirmed:
+                raise RuntimeError("SpeechKit recovery requires a local endpoint")
+            for offset in range(0, len(utterance.retained), 65536):
+                yield p.StreamingRequest(
+                    chunk=p.AudioChunk(data=bytes(utterance.retained[offset : offset + 65536]))
+                )
+            yield p.StreamingRequest(eou=p.Eou())
+            return
         while True:
             chunk = await utterance.audio.get()
             if chunk is None:
@@ -228,13 +306,69 @@ class SpeechKitSTT(BaseSTT):
             yield p.StreamingRequest(chunk=p.AudioChunk(data=chunk))
 
     async def _recognize(self, utterance):
-        requests = self._requests(utterance)
+        deadline = (
+            asyncio.get_running_loop().time()
+            + self.vad.settings.max_utterance_ms / 1000
+            + self.settings.final_timeout
+        )
+        recovery_started = None
+        try:
+            for attempt in (1, 2):
+                try:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    text = await self._recognize_once(
+                        utterance, full_data=attempt > 1, timeout=remaining
+                    )
+                    if recovery_started is not None:
+                        self.emit(
+                            "stt_recovery_succeeded",
+                            attempt=attempt,
+                            duration_ms=round((time.monotonic() - recovery_started) * 1000),
+                        )
+                    return text
+                except Exception as exc:
+                    error_type, status = _error_category(exc)
+                    recoverable = attempt == 1 and _can_recover(exc)
+                    self.emit(
+                        "stt_request_error",
+                        error_type=error_type,
+                        provider_status=status,
+                        attempt=attempt,
+                        retryable=recoverable,
+                    )
+                    if not recoverable:
+                        raise
+                    utterance.recovering = True
+                    recovery_started = time.monotonic()
+                    # Continue collecting bounded PCM until the existing local
+                    # VAD endpoint. FULL_DATA avoids racing a live replay stream.
+                    # _deliver_final keeps its original post-endpoint deadline.
+                    async with deadline_timeout(deadline):
+                        await utterance.endpoint.wait()
+                        await asyncio.sleep(random.uniform(0.08, 0.12))
+                    if not self._accepting or not self._deliver:
+                        raise asyncio.CancelledError
+                    self.emit(
+                        "stt_recovery_started", attempt=2, audio_bytes=len(utterance.retained)
+                    )
+            raise RuntimeError("SpeechKit recognition attempt limit exceeded")
+        finally:
+            utterance.retained.clear()
+            while not utterance.audio.empty():
+                utterance.audio.get_nowait()
+
+    async def _recognize_once(self, utterance, *, full_data, timeout):
+        from grpc.aio import AioRpcError
+
+        requests = self._requests(utterance, full_data=full_data)
         rpc = self._stub.RecognizeStreaming(
             metadata=(
                 ("authorization", "Api-Key " + self.settings.api_key),
                 ("x-data-logging-enabled", "false"),
             ),
-            timeout=self.vad.settings.max_utterance_ms / 1000 + self.settings.final_timeout,
+            timeout=timeout,
         )
         self._rpcs.add(rpc)
 
@@ -243,6 +377,12 @@ class SpeechKitSTT(BaseSTT):
                 async for request in requests:
                     await rpc.write(request)
                 await rpc.done_writing()
+            except AioRpcError:
+                # A write may report INTERNAL while the response side still
+                # carries the server's actual status (e.g. UNAVAILABLE). Do not
+                # replace those trailers with a local cancellation. The reader
+                # and the unchanged RPC/final deadlines supervise completion.
+                raise
             except BaseException:
                 rpc.cancel()
                 raise
@@ -294,7 +434,7 @@ class SpeechKitSTT(BaseSTT):
                 else:
                     raise ValueError("Unexpected SpeechKit response")
             if not utterance.confirmed:
-                raise RuntimeError("SpeechKit closed before local speech endpoint")
+                raise _SpeechKitEarlyClose("SpeechKit closed before local speech endpoint")
             await sender
             segments = [refined.get(index, text) for index, text in enumerate(finals)]
             return " ".join(segment for segment in segments if segment)

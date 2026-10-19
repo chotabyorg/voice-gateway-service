@@ -46,6 +46,9 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    One explicit complete `+375` number, including bounded Russian spoken groups
    and a leading name/contact phrase, uses the existing 0.9-second continuation
    window. Pending finals are considered together without rewriting their text.
+   A request of at most 512 characters can also use that window when it ends in
+   exactly one complete phone number. Dates and times before that suffix do not
+   extend the hold; whole-request ambiguity and correction checks still apply.
    Partial numbers, other countries, alternatives, extensions and corrections
    keep the 2.5-second numeric window, including long explicit phone fragments.
    Ongoing speech still postpones delivery; closure fences pending finals.

@@ -10,7 +10,11 @@ import re
 import time
 
 from .observability import emit_event
-from .phone_endpoint import complete_phone_dictation, phone_dictation_fragment
+from .phone_endpoint import (
+    complete_phone_dictation,
+    complete_phone_suffix,
+    phone_dictation_fragment,
+)
 
 
 _NUMBER_WORDS = frozenset(
@@ -139,7 +143,7 @@ class UtteranceCoordinator:
         self.pending.append(text)
         self.pending_speech_at = speech_ended_at
         combined = " ".join(self.pending)
-        if complete_phone_dictation(combined):
+        if complete_phone_dictation(combined) or complete_phone_suffix(combined):
             window = self.continuation_seconds
             self.short_phone_speech_at = (
                 self.last_speech if speech_ended_at is None else speech_ended_at

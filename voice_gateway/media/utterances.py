@@ -162,12 +162,16 @@ class UtteranceCoordinator:
         while self.pending and not self.closed:
             self.changed.clear()
             deadline = max(self.deadline, self.last_speech + self.silence_seconds)
-            if (
-                self.short_phone_speech_at is not None
-                and self.last_speech > self.short_phone_speech_at
-            ):
-                # New speech may be an unrecognized correction. VAD silence is
-                # not evidence that its final transcript has already arrived.
+            covered_speech_at = self.pending_speech_at
+            if covered_speech_at is None:
+                # Preserve the existing phone heuristic for adapters without
+                # an explicit acoustic timestamp on their final transcript.
+                covered_speech_at = self.short_phone_speech_at
+            if covered_speech_at is not None and self.last_speech > covered_speech_at:
+                # Newer classified speech can still be awaiting recognition,
+                # including a contact dictated after a finished request. Silence
+                # alone does not prove that its final transcript has arrived.
+                # A missing final releases the input at the same bounded window.
                 deadline = max(deadline, self.last_speech + self.numeric_continuation_seconds)
             delay = deadline - time.monotonic()
             if delay > 0:

@@ -108,7 +108,11 @@ class BatchSTT(BaseSTT):
             self.emit("stt_acoustic_buffer_rejected", audio_bytes=self.vad.buffer_bytes)
             raise
         if self.vad.has_speech and self.vad.silence_ms == 0:
-            self._speech_ended_at = ended_at
+            # A newly arrived packet can contain older buffered audio. Its
+            # backdated frames must not undo speech already observed by MediaCall.
+            self._speech_ended_at = max(
+                ended_at, self._speech_ended_at if self._speech_ended_at is not None else ended_at
+            )
             self._discard_early()
         if ready:
             await self._flush_utterance()

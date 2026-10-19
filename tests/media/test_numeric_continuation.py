@@ -1,11 +1,13 @@
 """A dictated phone number must not be answered as a finished request."""
 
+import asyncio
 import time
 
 import pytest
 
 from voice_gateway.media.utterances import (
     UtteranceCoordinator,
+    complete_phone_dictation,
     likely_unfinished,
     numeric_dictation,
 )
@@ -73,3 +75,81 @@ def test_numeric_window_cannot_be_shorter_than_continuation():
         UtteranceCoordinator(
             lambda text: None, continuation_seconds=2.0, numeric_continuation_seconds=1.0
         )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "+375173820015",
+        "+375 17 382 00 15",
+        "+375 (17) 382-00-15.",
+        " +375 17 382-00-15! ",
+        "номер +375173820015",
+    ],
+)
+async def test_complete_explicit_phone_uses_normal_continuation_window(text):
+    assert complete_phone_dictation(text)
+    coordinator = UtteranceCoordinator(None)
+    started = time.monotonic()
+    await coordinator.submit(text)
+    try:
+        assert 0.8 <= coordinator.deadline - started <= 1.0
+    finally:
+        await coordinator.close()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "+375 17 382 00",
+        "+3751738200156",
+        "375173820015",
+        "+375 (17 382-00-15",
+        "+375 )17( 382-00-15",
+        "плюс три семь пять",
+        "+375 17 382 00 15 добавочный 2",
+        "+12025550112",
+        "+375173820015 или +375173820016",
+        "+375１７３８２００１５",
+    ],
+)
+def test_fragments_other_formats_and_corrections_do_not_take_fast_path(text):
+    assert not complete_phone_dictation(text)
+
+
+async def test_speech_and_following_final_still_postpone_complete_number():
+    seen = []
+    delivered = asyncio.Event()
+
+    async def callback(text):
+        seen.append(text)
+        delivered.set()
+
+    coordinator = UtteranceCoordinator(
+        callback,
+        silence_seconds=0.08,
+        continuation_seconds=0.03,
+        numeric_continuation_seconds=0.12,
+    )
+    await coordinator.submit("+375173820015")
+    coordinator.speech()
+    try:
+        await asyncio.sleep(0.04)
+        assert not seen
+        await coordinator.submit("пятнадцать, исправьте на шестнадцать")
+        await asyncio.wait_for(delivered.wait(), 0.4)
+        assert seen == ["+375173820015 пятнадцать, исправьте на шестнадцать"]
+    finally:
+        await coordinator.close()
+
+
+async def test_close_fences_pending_complete_number():
+    seen = []
+
+    async def callback(text):
+        seen.append(text)
+
+    coordinator = UtteranceCoordinator(callback)
+    await coordinator.submit("+375173820015")
+    await coordinator.close()
+    assert seen == [] and not coordinator.pending and coordinator.task.done()

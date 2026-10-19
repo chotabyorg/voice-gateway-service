@@ -37,6 +37,12 @@ and never calls Managed AI. Conversation owns the wire contract and canonical st
    recognition completion, failure or cancellation. No prior utterance is replayed.
 3. `UtteranceCoordinator` can combine closely spaced acoustic finals. It is a
    media heuristic; it does not schedule or own a Main Chota `AgentTurn`.
+   One explicit complete `+375` number, including bounded Russian spoken groups
+   and a leading name/contact phrase, uses the existing 0.9-second continuation
+   window. Pending finals are considered together without rewriting their text.
+   Partial numbers, other countries, alternatives, extensions and corrections
+   keep the 2.5-second numeric window, including long explicit phone fragments.
+   Ongoing speech still postpones delivery; closure fences pending finals.
 4. `VoiceToConversationPort` is the typed local seam for call start/end, final
    utterance, authorized assistant speech, and playback facts. It is a Python
    protocol plus local dataclasses, not a wire protocol.

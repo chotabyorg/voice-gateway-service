@@ -10,6 +10,7 @@ import re
 import time
 
 from .observability import emit_event
+from .phone_endpoint import complete_phone_dictation, phone_dictation_fragment
 
 
 _NUMBER_WORDS = frozenset(
@@ -23,18 +24,6 @@ zero one two three four five six seven eight nine ten plus minus code number
 """.split()
 )
 _NON_NUMERIC = re.compile(r"[^0-9a-zа-яёіў]+")
-_COMPLETE_BY_PHONE = re.compile(
-    r"\+375(?:[ -]?[0-9]{2}| ?\([0-9]{2}\))[ -]?[0-9]{3}[ -]?[0-9]{2}[ -]?[0-9]{2}[.!?]?"
-)
-
-
-def complete_phone_dictation(text):
-    """Recognize one explicit +375 final; fragments/number words stay conservative.
-
-    This is only an acoustic continuation hint, not phone validation or a claim
-    that the caller has finished. Ongoing speech still postpones delivery.
-    """
-    return bool(_COMPLETE_BY_PHONE.fullmatch(" ".join(text.split())))
 
 
 def numeric_dictation(text):
@@ -148,9 +137,10 @@ class UtteranceCoordinator:
         self.pending_chars += len(text) + bool(self.pending)
         self.pending.append(text)
         self.pending_speech_at = speech_ended_at
-        if complete_phone_dictation(text):
+        combined = " ".join(self.pending)
+        if complete_phone_dictation(combined):
             window = self.continuation_seconds
-        elif numeric_dictation(text):
+        elif numeric_dictation(text) or phone_dictation_fragment(combined):
             window = self.numeric_continuation_seconds
         elif likely_unfinished(text):
             window = self.continuation_seconds

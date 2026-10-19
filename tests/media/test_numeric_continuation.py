@@ -79,7 +79,13 @@ def test_numeric_window_cannot_be_shorter_than_continuation():
 
 @pytest.mark.parametrize(
     "text",
-    ["+375173820015", "+375 17 382 00 15", "+375 (17) 382-00-15.", " +375 17 382-00-15! "],
+    [
+        "+375173820015",
+        "+375 17 382 00 15",
+        "+375 (17) 382-00-15.",
+        " +375 17 382-00-15! ",
+        "номер +375173820015",
+    ],
 )
 async def test_complete_explicit_phone_uses_normal_continuation_window(text):
     assert complete_phone_dictation(text)
@@ -102,7 +108,6 @@ async def test_complete_explicit_phone_uses_normal_continuation_window(text):
         "+375 )17( 382-00-15",
         "плюс три семь пять",
         "+375 17 382 00 15 добавочный 2",
-        "номер +375173820015",
         "+12025550112",
         "+375173820015 или +375173820016",
         "+375１７３８２００１５",

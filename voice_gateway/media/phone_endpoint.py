@@ -9,7 +9,7 @@ import unicodedata
 
 _PLUS = re.compile(r"\+|\bплюс\b")
 _UNCERTAIN = re.compile(
-    r"\b(?:не|нет|или|либо|вернее|точнее|исправ\w*|поправ\w*|последн\w*|добавоч\w*)\b"
+    r"\b(?:не|нет|или|либо|вернее|точнее|ошиб\w*|исправ\w*|поправ\w*|последн\w*|добавоч\w*)\b"
 )
 _DIGITAL_BY_PHONE = re.compile(
     r"\+375(?:[ -]?[0-9]{2}| ?\([0-9]{2}\))[ -]?[0-9]{3}[ -]?[0-9]{2}[ -]?[0-9]{2}"
@@ -112,11 +112,11 @@ def complete_phone_dictation(text):
 
 
 def phone_dictation_fragment(text):
-    """Keep a long or name-prefixed explicit phone fragment from ending early."""
-    if not isinstance(text, str) or len(text) > 256:
+    """Keep explicit fragments on the long wait within the caller's buffer bound."""
+    if not isinstance(text, str):
         return False
-    markers = list(_PLUS.finditer(text.casefold()))
-    if not markers:
+    marker = _PLUS.search(text.casefold())
+    if marker is None:
         return False
-    tail = text[markers[0].end() :].casefold()
+    tail = text[marker.end() :].casefold()
     return bool(re.search(r"[0-9]|\b(?:" + "|".join(_NUMBER_WORDS) + r")\b", tail))

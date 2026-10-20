@@ -131,7 +131,8 @@ async def test_late_suffix_does_not_clear_pending_caller_answer_or_leak_to_anoth
 async def test_three_consecutive_interruptions_allow_only_the_next_response_group():
     port = ResponsePort()
     call, task, transport, stt, tts, _ = await start_call(
-        port=port, tts=FakeTTS(pcm(2000, 1000)),
+        port=port,
+        tts=FakeTTS(pcm(2000, 1000)),
         settings=MediaSettings(post_playback_suppression_seconds=0),
     )
     try:
@@ -142,8 +143,12 @@ async def test_three_consecutive_interruptions_allow_only_the_next_response_grou
             await asyncio.wait_for(transport.wrote.wait(), 1)
             for _ in range(5):
                 await call.feed_audio(pcm(3000))
-            await until(lambda: any(f.request_id == group and f.state == PlaybackState.INTERRUPTED
-                                   for f in port.playback))
+            await until(
+                lambda: any(
+                    f.request_id == group and f.state == PlaybackState.INTERRUPTED
+                    for f in port.playback
+                )
+            )
             suffix = f"suffix-{index}"
             await port.queue.put(AuthorizedSpeech(suffix, "Старое продолжение.", False, group))
             await until(lambda: any(f.request_id == suffix for f in port.playback))
@@ -154,8 +159,12 @@ async def test_three_consecutive_interruptions_allow_only_the_next_response_grou
         assert tts.texts == ["Проверяю время."] * 3
         tts.audio = pcm(2000, 40)
         await port.queue.put(AuthorizedSpeech("fresh", "Уточните время.", False, "fresh"))
-        await until(lambda: any(f.request_id == "fresh" and f.state == PlaybackState.COMPLETED
-                               for f in port.playback))
+        await until(
+            lambda: any(
+                f.request_id == "fresh" and f.state == PlaybackState.COMPLETED
+                for f in port.playback
+            )
+        )
         assert tts.texts[-1] == "Уточните время."
     finally:
         await transport.incoming.put(None)

@@ -1,10 +1,27 @@
 """Per-call PCM interfaces; these are runtime ports, not platform Call models."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 TextCallback = Callable[[str], Awaitable[None]]
 EndCallback = Callable[[], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class STTCapabilities:
+    streaming_transcription: bool = False
+    partial_results: bool = False
+    cancellation: bool = True
+    local_speech_timestamps: bool = True
+    input_pcm_rate: int = 8000
+
+
+@dataclass(frozen=True)
+class TTSCapabilities:
+    streaming_synthesis: bool = False
+    cancellation: bool = True
+    output_pcm_rate: int = 8000
 
 
 class TransportIdleTimeout(TimeoutError):
@@ -43,6 +60,11 @@ class CallTransport(ABC):
 
 
 class BaseSTT(ABC):
+    capabilities = STTCapabilities()
+    uses_speech_classifier: bool = False
+    last_speech_at: float | None = None
+    final_speech_at: float | None = None
+
     @abstractmethod
     async def start_stream(
         self,
@@ -66,9 +88,20 @@ class BaseSTT(ABC):
 
 
 class BaseTTS(ABC):
+    capabilities = TTSCapabilities()
+
     @abstractmethod
     async def synthesize(self, text: str) -> bytes:
         """PCM16 8000Hz mono. Provider conversion belongs in the adapter."""
+
+    async def synthesize_stream(self, text: str):
+        """Bounded chunk view for batch adapters; not native streaming synthesis."""
+        audio = await self.synthesize(text)
+        for offset in range(0, len(audio), 65536):
+            yield audio[offset : offset + 65536]
+
+    def prewarm(self) -> None:
+        """Optional connection preparation; resource ownership stays in the adapter."""
 
     async def close(self) -> None:
         pass

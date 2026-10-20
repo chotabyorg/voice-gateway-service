@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from ..audio import pcm_to_wav, validate_pcm
 from ..batch_stt import BatchSTT
 from ..completion import deadline_timeout
-from ..interfaces import BaseTTS
+from ..interfaces import BaseTTS, TTSCapabilities
 from ..speech_text import pronounce_byn
 from .decoder import decode_audio_stream
 from .pcm_resampler import resample_pcm_stream
@@ -166,6 +166,8 @@ class OpenRouterSTT(BatchSTT):
 
 
 class OpenRouterTTS(BaseTTS):
+    capabilities = TTSCapabilities(streaming_synthesis=True)
+
     def __init__(self, settings, *, client_factory=None, decoder=None):
         self.settings = settings
         self.decoder = decoder or (

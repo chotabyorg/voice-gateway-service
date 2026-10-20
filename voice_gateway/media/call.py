@@ -122,6 +122,13 @@ class MediaCall:
         emit=None,
         interruption_classifier=None,
     ):
+        if (
+            stt.capabilities.input_pcm_rate != 8000
+            or tts.capabilities.output_pcm_rate != 8000
+            or not stt.capabilities.cancellation
+            or not tts.capabilities.cancellation
+        ):
+            raise ValueError("Media adapters require cancellable PCM16 8000Hz mono ports")
         self.transport, self.stt, self.tts = transport, stt, tts
         self.conversation_port, self.settings = conversation_port, settings
         self._observer = emit
@@ -196,8 +203,7 @@ class MediaCall:
         try:
             async with asyncio.timeout(self.settings.max_call_seconds):
                 await self.transport.prepare()
-                if hasattr(self.tts, "prewarm"):
-                    self.tts.prewarm()
+                self.tts.prewarm()
                 await self.stt.start_stream(on_final=self._final)
                 await self.conversation_port.call_started(
                     CallStarted(
@@ -327,7 +333,12 @@ class MediaCall:
     async def _final(self, text):
         if self.state == CallState.ACTIVE:
             await self.utterances.submit(
-                text, speech_ended_at=getattr(self.stt, "final_speech_at", None)
+                text,
+                speech_ended_at=(
+                    self.stt.final_speech_at
+                    if self.stt.capabilities.local_speech_timestamps
+                    else None
+                ),
             )
 
     async def _deliver_utterance(self, text):
@@ -396,7 +407,7 @@ class MediaCall:
             return
         if time.monotonic() < self._suppress_until:
             return
-        if getattr(self.stt, "uses_speech_classifier", False):
+        if self.stt.uses_speech_classifier:
             await self.stt.feed_audio(audio)
             # A second, energy-only clock would let steady noise postpone a
             # classified final forever, even after STT found the end of speech.
@@ -592,7 +603,7 @@ class MediaCall:
             return not output.revoked.is_set() and self.state == CallState.ACTIVE
 
         async def chunks():
-            if hasattr(self.tts, "synthesize_stream"):
+            if self.tts.capabilities.streaming_synthesis:
                 async with aclosing(self.tts.synthesize_stream(text)) as stream:
                     async for chunk in stream:
                         if not active():
@@ -754,7 +765,7 @@ class MediaCall:
             ("conversation", self._stop_conversation_tasks),
             ("utterances", self.utterances.close),
             ("transport", self.transport.close),
-            ("stt", getattr(self.stt, "abort_stream", self.stt.stop_stream)),
+            ("stt", self.stt.abort_stream),
             ("tts", self.tts.close),
         )
         cancellation = None

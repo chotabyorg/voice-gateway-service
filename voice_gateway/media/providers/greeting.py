@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from ..interfaces import BaseTTS
+
 _GREETING = re.compile(
     r"^\s*(здравствуйте|здравствуй|добрый день|добрый вечер|доброе утро"
     r"|приветствую|привет)[\s,!.…?]*",
@@ -81,7 +83,7 @@ def strip_stock_formulas(text: str) -> str:
     return strip_trailing_offer(strip_leading_greeting(text))
 
 
-class GreetingStripTTS:
+class GreetingStripTTS(BaseTTS):
     """Wraps any TTS adapter; strips stock formulas before synthesis.
 
     Streaming is preserved when the inner adapter supports it, otherwise a
@@ -92,24 +94,20 @@ class GreetingStripTTS:
     def __init__(self, inner) -> None:
         self._inner = inner
 
+    @property
+    def capabilities(self):
+        return self._inner.capabilities
+
     async def synthesize(self, text: str) -> bytes:
         return await self._inner.synthesize(strip_stock_formulas(text))
 
     async def synthesize_stream(self, text: str):
         cleaned = strip_stock_formulas(text)
-        stream = getattr(self._inner, "synthesize_stream", None)
-        if stream is None:
-            audio = await self._inner.synthesize(cleaned)
-            for offset in range(0, len(audio), 65536):
-                yield audio[offset : offset + 65536]
-            return
-        async for piece in stream(cleaned):
+        async for piece in self._inner.synthesize_stream(cleaned):
             yield piece
 
     def prewarm(self) -> None:
-        prewarm = getattr(self._inner, "prewarm", None)
-        if prewarm is not None:
-            prewarm()
+        self._inner.prewarm()
 
     async def close(self) -> None:
         await self._inner.close()

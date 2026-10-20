@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from ..audio import PCM, validate_pcm
 from ..completion import bounded_call, deadline_timeout, finish_owned_task, observe_task
-from ..interfaces import BaseSTT, BaseTTS
+from ..interfaces import BaseSTT, BaseTTS, STTCapabilities, TTSCapabilities
 from ..speech_text import pronounce_booking_values, pronounce_byn
 from ..observability import emit_event
 from ..vad import EnergyVAD, VADSettings
@@ -117,6 +117,8 @@ def _connection():
 
 
 class SpeechKitSTT(BaseSTT):
+    capabilities = STTCapabilities(streaming_transcription=True)
+
     def __init__(
         self,
         settings,
@@ -562,6 +564,8 @@ def _tts_connection():
 
 
 class SpeechKitTTS(BaseTTS):
+    capabilities = TTSCapabilities(streaming_synthesis=True)
+
     """Stream authorized speech directly as PCM16 mono 8 kHz.
 
     This is a speech provider only: it does not stream LLM drafts or grant

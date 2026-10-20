@@ -19,6 +19,7 @@ from voice_gateway.events import CallEndReason, PlaybackState
 from voice_gateway.media.audiosocket import AudioSocketTransport
 from voice_gateway.media.batch_stt import BatchSTT
 from voice_gateway.media.call import CallState, MediaCall, MediaSettings
+from voice_gateway.media.interfaces import TTSCapabilities
 from voice_gateway.media.playback import PlaybackControl, play_pcm_stream
 from voice_gateway.media.vad import EnergyVAD, VADSettings
 
@@ -198,6 +199,8 @@ async def test_stream_starts_before_synthesis_finishes_and_closes_on_barge_in():
     closed = asyncio.Event()
 
     class Streaming(FakeTTS):
+        capabilities = TTSCapabilities(streaming_synthesis=True)
+
         async def synthesize_stream(self, text):
             try:
                 yield pcm(2000, 100)

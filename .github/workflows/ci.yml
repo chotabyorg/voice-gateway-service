@@ -21,7 +21,7 @@ jobs:
       - name: Install pinned development dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libc++1
+          sudo apt-get install -y libc++1 ffmpeg
           python -m pip install -r requirements-dev.txt
       - name: Lint
         run: ruff check .

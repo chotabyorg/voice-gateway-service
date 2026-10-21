@@ -126,3 +126,46 @@ async def test_late_suffix_does_not_clear_pending_caller_answer_or_leak_to_anoth
     finally:
         await transport.incoming.put(None)
         await asyncio.wait_for(task, 1)
+
+
+async def test_three_consecutive_interruptions_allow_only_the_next_response_group():
+    port = ResponsePort()
+    call, task, transport, stt, tts, _ = await start_call(
+        port=port,
+        tts=FakeTTS(pcm(2000, 1000)),
+        settings=MediaSettings(post_playback_suppression_seconds=0),
+    )
+    try:
+        for index in range(3):
+            group = f"answer-{index}"
+            transport.wrote.clear()
+            await port.queue.put(AuthorizedSpeech(group, "Проверяю время.", True, group))
+            await asyncio.wait_for(transport.wrote.wait(), 1)
+            for _ in range(5):
+                await call.feed_audio(pcm(3000))
+            await until(
+                lambda: any(
+                    f.request_id == group and f.state == PlaybackState.INTERRUPTED
+                    for f in port.playback
+                )
+            )
+            suffix = f"suffix-{index}"
+            await port.queue.put(AuthorizedSpeech(suffix, "Старое продолжение.", False, group))
+            await until(lambda: any(f.request_id == suffix for f in port.playback))
+            rejected = [f for f in port.playback if f.request_id == suffix]
+            assert len(rejected) == 1 and rejected[0].state == PlaybackState.NOT_STARTED
+            assert rejected[0].generated_bytes == rejected[0].transport_accepted_bytes == 0
+        assert len(stt.chunks) >= 15
+        assert tts.texts == ["Проверяю время."] * 3
+        tts.audio = pcm(2000, 40)
+        await port.queue.put(AuthorizedSpeech("fresh", "Уточните время.", False, "fresh"))
+        await until(
+            lambda: any(
+                f.request_id == "fresh" and f.state == PlaybackState.COMPLETED
+                for f in port.playback
+            )
+        )
+        assert tts.texts[-1] == "Уточните время."
+    finally:
+        await transport.incoming.put(None)
+        await asyncio.wait_for(task, 1)

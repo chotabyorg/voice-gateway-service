@@ -29,13 +29,13 @@ class ReplayServer(Server):
         if len(self.attempts) == 1:
             if self.mode in {"committed", "cancelled"}:
                 await super().handle(request)
-            if self.mode == "deadline":
-                await asyncio.sleep(0.03)
             raise httpx.ReadError("must not log customer text or secret")
         if self.mode == "always_fails":
             raise httpx.ReadTimeout("must not log customer text or secret")
         if self.mode == "deadline":
-            await asyncio.sleep(0.03)
+            # The second request stays pending until the original timeout.
+            # Do not rely on two 30 ms sleeps fitting a 50 ms Windows budget.
+            await asyncio.Event().wait()
         if self.mode == "cancelled":
             self.retry_started.set()
             await self.release_retry.wait()
@@ -82,22 +82,31 @@ async def test_transport_retry_keeps_exact_bytes_and_advances_sequence_once(mode
 
 
 @pytest.mark.parametrize("mode", ["always_fails", "deadline"])
-async def test_second_failure_or_original_deadline_fences_later_facts(mode, caplog):
+async def test_second_failure_or_original_deadline_fences_later_facts(mode, caplog, monkeypatch):
     server = ReplayServer(mode)
     port = adapter(server)
-    port.timeout = 0.05
+    port.timeout = 0.2
     call_id = str(uuid4())
     responses = port.responses(call_id)
     try:
         await port.call_started(CallStarted(call_id, 0))
         server.available = True
         speech = await anext(responses)
+        timeout_scopes = []
+        timeout = asyncio.timeout
+
+        def record_timeout(delay):
+            timeout_scopes.append(delay)
+            return timeout(delay)
+
+        monkeypatch.setattr(asyncio, "timeout", record_timeout)
         with pytest.raises(ConversationBoundaryError):
             await port.playback_fact(fact(call_id, speech.request_id, PlaybackState.PARTIAL))
+        assert timeout_scopes == [port.timeout]  # One deadline owns both attempts.
         assert port.sessions[call_id].failed.is_set()
         assert port.sessions[call_id].event_sequence == 0
         assert len(server.attempts) == 2 and server.attempts[0] == server.attempts[1]
-        assert not server.facts  # A fresh deadline for retry would incorrectly succeed.
+        assert not server.facts
         with pytest.raises(ConversationBoundaryError):
             await port.playback_fact(fact(call_id, speech.request_id, PlaybackState.INTERRUPTED))
         assert len(server.attempts) == 2

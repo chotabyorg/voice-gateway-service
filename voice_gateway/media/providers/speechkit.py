@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from ..audio import PCM, validate_pcm
 from ..completion import bounded_call, deadline_timeout, finish_owned_task, observe_task
 from ..interfaces import BaseSTT, BaseTTS, STTCapabilities, TTSCapabilities
-from ..speech_text import pronounce_booking_values, pronounce_byn
+from ..speech_text import prepare_tts_text
 from ..observability import emit_event
 from ..vad import EnergyVAD, VADSettings
 
@@ -527,6 +527,7 @@ class SpeechKitTTSSettings:
     voice: str = "sofia"
     role: str = "support"
     expand_byn: bool = False
+    pronounce_booking_values: bool = True
     max_text_chars: int = 2000
     max_pcm_bytes: int = 1_920_000
     stream_timeout: float = 120
@@ -607,8 +608,11 @@ class SpeechKitTTS(BaseTTS):
             raise ValueError("Invalid SpeechKit TTS text")
         # Every configured SpeechKit voice is Russian. Keep canonical replies intact;
         # only the provider input uses spoken phone/date/clock/zone forms.
-        text = pronounce_booking_values(text)
-        text = pronounce_byn(text) if self.settings.expand_byn else text
+        text = prepare_tts_text(
+            text,
+            booking_values=self.settings.pronounce_booking_values,
+            expand_byn=self.settings.expand_byn,
+        )
         if (
             not text.strip()
             or len(text) > self.settings.max_text_chars

@@ -3,6 +3,16 @@
 import re
 from datetime import date
 
+
+def prepare_tts_text(text: str, *, booking_values=False, expand_byn=False) -> str:
+    """One pronunciation pass on the provider's speech copy, never canonical text."""
+    if not isinstance(text, str):
+        raise ValueError("Invalid TTS text")
+    if booking_values:
+        text = pronounce_booking_values(text)
+    return pronounce_byn(text) if expand_byn else text
+
+
 _AMOUNT = r"\d+(?:[ \u00a0\u202f]\d{3})*(?:[.,]\d{1,2})?"
 _BYN_AMOUNT = re.compile(
     rf"(?<![\w.,])(?:(?P<amount>{_AMOUNT})\s*BYN\b|BYN\s*(?P<prefix>{_AMOUNT})(?![\d.,]))",

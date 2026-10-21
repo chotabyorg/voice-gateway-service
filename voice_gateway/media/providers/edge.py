@@ -7,6 +7,7 @@ from contextlib import aclosing
 from ..audio import validate_pcm
 from ..completion import finish_owned_task
 from ..interfaces import BaseTTS
+from ..speech_text import prepare_tts_text
 
 DEFAULT_VOICE = "ru-RU-SvetlanaNeural"
 _PIPE_CHUNK = 65536
@@ -17,6 +18,8 @@ class EdgeTTSSettings:
     voice: str = DEFAULT_VOICE
     rate: str = "+0%"
     pitch: str = "+0Hz"
+    pronounce_booking_values: bool = False
+    expand_byn: bool = False
     max_text_chars: int = 4000
     max_mp3_bytes: int = 8 * 1024 * 1024
     max_pcm_bytes: int = 8 * 1024 * 1024
@@ -153,6 +156,11 @@ class EdgeTTS(BaseTTS):
         text = (text or "").strip()
         if not text:
             return b""
+        text = prepare_tts_text(
+            text,
+            booking_values=self.settings.pronounce_booking_values,
+            expand_byn=self.settings.expand_byn,
+        )
         if len(text) > self.settings.max_text_chars:
             raise ValueError("TTS text exceeds configured limit")
         mp3 = await self._synthesize_mp3(text)

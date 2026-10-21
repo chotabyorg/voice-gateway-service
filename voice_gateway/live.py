@@ -41,21 +41,27 @@ class LiveSettings(BaseSettings):
     voice_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     conversation_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     allowed_numbers: str
-    stt_provider: Literal["groq", "openrouter", "speechkit"]
-    stt_api_key: SecretStr
+    stt_provider: Literal["groq", "openrouter", "speechkit", "pcm_http"]
+    stt_api_key: SecretStr = SecretStr("")
+    stt_base_url: str = ""
+    stt_endpoint_api_key: SecretStr = SecretStr("")
     stt_model: str = Field(min_length=1, max_length=200)
     stt_language: Literal["", "ru", "en", "be"] = "ru"
     stt_early_start_ms: int = Field(default=0, ge=0, lt=500)
     vad: Literal["energy", "webrtc", "ten"] = "energy"
     vad_silence_ms: int = Field(default=500, ge=200, le=1500)
     conversation_poll_ms: int = Field(default=100, ge=50, le=1000)
-    tts_provider: Literal["edge", "openrouter", "speechkit"]
+    tts_provider: Literal["edge", "openrouter", "speechkit", "pcm_http"]
     tts_api_key: SecretStr = SecretStr("")
+    tts_base_url: str = ""
+    tts_endpoint_api_key: SecretStr = SecretStr("")
+    tts_pcm_sample_rate: Literal[8000, 16000, 24000, 48000] = 8000
     tts_model: str = Field(default="", max_length=200)
     tts_voice: str = Field(min_length=1, max_length=200)
     tts_role: str = Field(default="support", max_length=32)
     tts_format: Literal["mp3", "pcm"] = "mp3"
     tts_expand_byn: bool = False
+    tts_pronounce_booking_values: bool | None = None
     tts_native_pcm_resampler: bool = False
     tts_strip_greeting: bool = False
     send_caller_number: bool = False
@@ -78,8 +84,33 @@ class LiveSettings(BaseSettings):
             raise ValueError("Separate boundary credentials are required")
         private_url(self.control_plane_url)
         private_url(self.conversation_url)
-        if not self.stt_api_key.get_secret_value():
+        self.validate_speech_adapters()
+        return self
+
+    def validate_speech_adapters(self):
+        """Only the selected adapter validates its credential and format contract."""
+        if self.stt_provider != "pcm_http" and not self.stt_api_key.get_secret_value():
             raise ValueError("STT credential is required")
+        if self.stt_provider == "pcm_http":
+            from voice_gateway.media.providers.pcm_http import PCMHTTPSettings
+
+            PCMHTTPSettings(
+                base_url=self.stt_base_url,
+                model=self.stt_model,
+                api_key=self.stt_endpoint_api_key.get_secret_value(),
+                language=self.stt_language,
+            )
+        if self.tts_provider == "pcm_http":
+            from voice_gateway.media.providers.pcm_http import PCMHTTPSettings
+
+            PCMHTTPSettings(
+                base_url=self.tts_base_url,
+                model=self.tts_model,
+                api_key=self.tts_endpoint_api_key.get_secret_value(),
+                sample_rate=self.tts_pcm_sample_rate,
+            )
+            if self.tts_format != "pcm" or self.tts_native_pcm_resampler:
+                raise ValueError("Private speech endpoint requires explicit PCM format")
         if self.stt_provider == "speechkit" and (
             self.stt_model != "general"
             or self.stt_language not in {"ru", "en"}
@@ -101,7 +132,6 @@ class LiveSettings(BaseSettings):
             )
             if self.tts_format != "pcm" or self.tts_native_pcm_resampler:
                 raise ValueError("SpeechKit TTS returns telephone PCM directly")
-        return self
 
 
 class LiveRuntime(VoiceGatewayRuntime):
@@ -173,13 +203,25 @@ def build_live_runtime(settings, config=None):
         for host in (settings.http_host, settings.audiosocket_host)
     ):
         raise ValueError("Live PBX ingress must bind to loopback")
-    if config.tts_provider != "speechkit" and shutil.which("ffmpeg") is None:
+    needs_ffmpeg = (
+        config.tts_provider == "edge"
+        or config.tts_provider == "openrouter"
+        and not (config.tts_format == "pcm" and config.tts_native_pcm_resampler)
+        or config.tts_provider == "pcm_http"
+        and config.tts_pcm_sample_rate in {16000, 48000}
+    )
+    if needs_ffmpeg and shutil.which("ffmpeg") is None:
         raise ValueError("Real TTS requires ffmpeg")
     for module in (
-        {"groq": "groq", "speechkit": "yandexcloud", "openrouter": "httpx"}[config.stt_provider],
-        {"edge": "edge_tts", "openrouter": "httpx", "speechkit": "yandexcloud"}[
-            config.tts_provider
+        {"groq": "groq", "speechkit": "yandexcloud", "openrouter": "httpx", "pcm_http": "httpx"}[
+            config.stt_provider
         ],
+        {
+            "edge": "edge_tts",
+            "openrouter": "httpx",
+            "speechkit": "yandexcloud",
+            "pcm_http": "httpx",
+        }[config.tts_provider],
     ):
         if importlib.util.find_spec(module) is None:
             raise ValueError("Selected speech provider dependency is unavailable")
@@ -208,7 +250,24 @@ def build_live_runtime(settings, config=None):
         max_utterance_ms=30000,
         min_speech_ms=120 if classifier_factory else 80,
     )
-    if config.stt_provider == "speechkit":
+    if config.stt_provider == "pcm_http":
+        from voice_gateway.media.providers.pcm_http import PCMHTTPSettings, PCMHTTPSTT
+
+        stt_config = PCMHTTPSettings(
+            base_url=config.stt_base_url,
+            model=config.stt_model,
+            api_key=config.stt_endpoint_api_key.get_secret_value(),
+            language=config.stt_language,
+        )
+
+        def stt_factory():
+            return PCMHTTPSTT(
+                stt_config,
+                vad=vad,
+                queue=queue,
+                speech_classifier=classifier_factory() if classifier_factory else None,
+            )
+    elif config.stt_provider == "speechkit":
         from voice_gateway.media.providers.speechkit import SpeechKitSettings, SpeechKitSTT
 
         stt_config = SpeechKitSettings(
@@ -261,8 +320,27 @@ def build_live_runtime(settings, config=None):
             return inner
         return GreetingStripTTS(inner)
 
-    if config.tts_provider == "edge":
-        tts_config = EdgeTTSSettings(voice=config.tts_voice)
+    if config.tts_provider == "pcm_http":
+        from voice_gateway.media.providers.pcm_http import PCMHTTPSettings, PCMHTTPTTS
+
+        tts_config = PCMHTTPSettings(
+            base_url=config.tts_base_url,
+            model=config.tts_model,
+            api_key=config.tts_endpoint_api_key.get_secret_value(),
+            voice=config.tts_voice,
+            sample_rate=config.tts_pcm_sample_rate,
+            pronounce_booking_values=config.tts_pronounce_booking_values or False,
+            expand_byn=config.tts_expand_byn,
+        )
+
+        def tts_factory():
+            return _voiced(PCMHTTPTTS(tts_config))
+    elif config.tts_provider == "edge":
+        tts_config = EdgeTTSSettings(
+            voice=config.tts_voice,
+            pronounce_booking_values=config.tts_pronounce_booking_values or False,
+            expand_byn=config.tts_expand_byn,
+        )
 
         def tts_factory():
             return _voiced(EdgeTTS(tts_config))
@@ -275,6 +353,11 @@ def build_live_runtime(settings, config=None):
             voice=config.tts_voice,
             role=config.tts_role,
             expand_byn=config.tts_expand_byn,
+            pronounce_booking_values=(
+                config.tts_pronounce_booking_values
+                if config.tts_pronounce_booking_values is not None
+                else True
+            ),
         )
 
         def tts_factory():
@@ -287,6 +370,7 @@ def build_live_runtime(settings, config=None):
             response_format=config.tts_format,
             expand_byn=config.tts_expand_byn,
             native_pcm_resampler=config.tts_native_pcm_resampler,
+            pronounce_booking_values=config.tts_pronounce_booking_values or False,
         )
 
         def tts_factory():

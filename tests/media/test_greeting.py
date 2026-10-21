@@ -99,7 +99,7 @@ async def test_wrapper_stream_strips_once_and_chunks():
 
 async def test_wrapper_stream_falls_back_without_native_support():
     inner = FakeTTS()
-    assert not hasattr(inner, "synthesize_stream")
+    assert not inner.capabilities.streaming_synthesis
     tts = GreetingStripTTS(inner)
     heard = b"".join([part async for part in tts.synthesize_stream("Привет! Да.")])
     assert heard == inner.audio

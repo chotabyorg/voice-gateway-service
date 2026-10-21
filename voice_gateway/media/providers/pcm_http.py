@@ -35,8 +35,10 @@ class PCMHTTPSettings:
     def __post_init__(self):
         try:
             url = urlsplit(self.base_url)
+            port = url.port
             host = url.hostname
             local = host == "localhost" or bool(host and ipaddress.ip_address(host).is_private)
+            local = local and (port is None or 1 <= port <= 65535)
         except ValueError:
             local = False
         if (

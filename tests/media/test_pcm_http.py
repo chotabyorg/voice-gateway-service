@@ -245,6 +245,8 @@ async def test_common_pronunciation_runs_once_on_speech_copy(kind, monkeypatch):
         "https://example.com/v1",
         "http://user:secret@127.0.0.1/v1",
         "http://127.0.0.1/v1?token=secret",
+        "http://127.0.0.1:invalid/v1",
+        "http://127.0.0.1:0/v1",
     ],
 )
 def test_private_endpoint_rejects_implicit_public_or_embedded_credentials(url):

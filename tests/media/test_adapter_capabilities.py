@@ -6,6 +6,7 @@ import pytest
 
 from tests.media.media_fakes import FakeConversationPort, FakeSTT, FakeTTS, FakeTransport
 from voice_gateway.media.call import MediaCall
+from voice_gateway.media.audio import PCM
 from voice_gateway.media.providers.greeting import GreetingStripTTS
 from voice_gateway.media.providers.openrouter import OpenRouterTTS
 from voice_gateway.media.providers.speechkit import SpeechKitSTT, SpeechKitTTS
@@ -14,8 +15,11 @@ from voice_gateway.media.providers.speechkit import SpeechKitSTT, SpeechKitTTS
 @pytest.mark.parametrize(
     "port,change",
     [
-        ("stt", {"input_pcm_rate": 16000}),
-        ("tts", {"output_pcm_rate": 24000}),
+        ("stt", {"pcm": replace(PCM, sample_rate=16000)}),
+        ("tts", {"pcm": replace(PCM, sample_rate=24000)}),
+        ("tts", {"pcm": replace(PCM, channels=2)}),
+        ("stt", {"final_results": False}),
+        ("tts", {"max_output_chunk_bytes": 3}),
         ("stt", {"cancellation": False}),
         ("tts", {"cancellation": False}),
     ],

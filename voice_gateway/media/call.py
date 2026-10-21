@@ -123,8 +123,11 @@ class MediaCall:
         interruption_classifier=None,
     ):
         if (
-            stt.capabilities.input_pcm_rate != 8000
-            or tts.capabilities.output_pcm_rate != 8000
+            stt.capabilities.pcm != PCM
+            or tts.capabilities.pcm != PCM
+            or not stt.capabilities.final_results
+            or not 2 <= tts.capabilities.max_output_chunk_bytes <= 65536
+            or tts.capabilities.max_output_chunk_bytes % 2
             or not stt.capabilities.cancellation
             or not tts.capabilities.cancellation
         ):
@@ -609,7 +612,7 @@ class MediaCall:
                         if not active():
                             raise asyncio.CancelledError
                         validate_pcm(chunk)
-                        if len(chunk) > 65536:
+                        if len(chunk) > self.tts.capabilities.max_output_chunk_bytes:
                             raise ValueError("TTS chunk exceeds configured limit")
                         output.generated += len(chunk)
                         if output.generated > self.settings.max_playback_bytes:
@@ -623,8 +626,9 @@ class MediaCall:
                 output.generated = len(audio)
                 if output.generated > self.settings.max_playback_bytes:
                     raise ValueError("Generated audio exceeds configured limit")
-                for offset in range(0, len(audio), 65536):
-                    yield audio[offset : offset + 65536]
+                limit = self.tts.capabilities.max_output_chunk_bytes
+                for offset in range(0, len(audio), limit):
+                    yield audio[offset : offset + limit]
             if not output.generated:
                 raise ValueError("TTS returned empty audio")
 

@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from .audio import PCM, PCMFormat
+
 TextCallback = Callable[[str], Awaitable[None]]
 EndCallback = Callable[[], Awaitable[None]]
 
@@ -12,16 +14,18 @@ EndCallback = Callable[[], Awaitable[None]]
 class STTCapabilities:
     streaming_transcription: bool = False
     partial_results: bool = False
+    final_results: bool = True
     cancellation: bool = True
     local_speech_timestamps: bool = True
-    input_pcm_rate: int = 8000
+    pcm: PCMFormat = PCM
 
 
 @dataclass(frozen=True)
 class TTSCapabilities:
     streaming_synthesis: bool = False
     cancellation: bool = True
-    output_pcm_rate: int = 8000
+    pcm: PCMFormat = PCM
+    max_output_chunk_bytes: int = 65536
 
 
 class TransportIdleTimeout(TimeoutError):
@@ -97,8 +101,9 @@ class BaseTTS(ABC):
     async def synthesize_stream(self, text: str):
         """Bounded chunk view for batch adapters; not native streaming synthesis."""
         audio = await self.synthesize(text)
-        for offset in range(0, len(audio), 65536):
-            yield audio[offset : offset + 65536]
+        limit = self.capabilities.max_output_chunk_bytes
+        for offset in range(0, len(audio), limit):
+            yield audio[offset : offset + limit]
 
     def prewarm(self) -> None:
         """Optional connection preparation; resource ownership stays in the adapter."""

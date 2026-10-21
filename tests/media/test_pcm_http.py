@@ -186,13 +186,14 @@ async def test_stt_contract_bounds_transcript_and_ignores_remote_clock(kind):
         await adapter.abort_stream()
 
 
-async def test_selected_private_adapters_need_no_cloud_key_or_ffmpeg_at_8khz(monkeypatch):
+@pytest.mark.parametrize("old_key", ["", "unused-cloud-key"])
+async def test_selected_private_adapters_need_no_cloud_key_or_ffmpeg_at_8khz(monkeypatch, old_key):
     monkeypatch.setattr("voice_gateway.live.shutil.which", lambda _: None)
     value = config(
         stt_provider="pcm_http",
         tts_provider="pcm_http",
-        stt_api_key="",
-        tts_api_key="",
+        stt_api_key=old_key,
+        tts_api_key=old_key,
         stt_base_url="http://127.0.0.1:19382/v1",
         tts_base_url="http://127.0.0.1:19382/v1",
         tts_format="pcm",
@@ -200,6 +201,7 @@ async def test_selected_private_adapters_need_no_cloud_key_or_ffmpeg_at_8khz(mon
     runtime = build_live_runtime(Settings(mode="live_audiosocket"), value)
     assert isinstance(runtime.stt_factory(), PCMHTTPSTT)
     assert isinstance(runtime.tts_factory(), PCMHTTPTTS)
+    assert runtime.stt_factory().settings.api_key == runtime.tts_factory().settings.api_key == ""
     await runtime.stop()
     with pytest.raises(ValueError, match="Separate boundary credentials"):
         value = config(
@@ -248,3 +250,85 @@ async def test_common_pronunciation_runs_once_on_speech_copy(kind, monkeypatch):
 def test_private_endpoint_rejects_implicit_public_or_embedded_credentials(url):
     with pytest.raises(ValueError, match="Invalid private speech endpoint"):
         PCMHTTPSettings(url, "test")
+
+
+@pytest.mark.parametrize(
+    "case", ["missing_rate", "wrong_rate", "stereo", "gzip", "input_limit", "output_limit"]
+)
+async def test_private_pcm_metadata_and_bounds_fail_and_close(case):
+    audio = Audio([b"\x10\0" * 2400])
+    headers = {"content-type": "audio/pcm;rate=8000;channels=1"}
+    if case == "missing_rate":
+        headers["content-type"] = "audio/pcm"
+    if case == "wrong_rate":
+        headers["content-type"] = "audio/pcm;rate=24000;channels=1"
+    if case == "stereo":
+        headers["content-type"] = "audio/pcm;rate=8000;channels=2"
+    if case == "gzip":
+        headers["content-encoding"] = "gzip"
+
+    def client(**kwargs):
+        return httpx.AsyncClient(
+            **kwargs,
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, headers=headers, stream=audio)
+            ),
+        )
+
+    options = (
+        {"max_input_bytes": 100}
+        if case == "input_limit"
+        else {"max_pcm_bytes": 100}
+        if case == "output_limit"
+        else {}
+    )
+    adapter = PCMHTTPTTS(
+        PCMHTTPSettings("http://127.0.0.1:19382/v1", "test", **options), client_factory=client
+    )
+    try:
+        with pytest.raises(ValueError):
+            await adapter.synthesize("Тест")
+        assert audio.closed == 1
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("case", ["malformed", "wrong_shape", "oversized"])
+async def test_private_transcript_rejects_invalid_or_oversized_response(case):
+    body = b"{" if case == "malformed" else b'{"text":0}' if case == "wrong_shape" else b"x" * 100
+    stream = Audio([body])
+
+    def client(**kwargs):
+        return httpx.AsyncClient(
+            **kwargs,
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200, headers={"content-type": "application/json"}, stream=stream
+                )
+            ),
+        )
+
+    adapter = PCMHTTPSTT(
+        PCMHTTPSettings("http://127.0.0.1:19382/v1", "test", max_response_bytes=50),
+        client_factory=client,
+    )
+    try:
+        with pytest.raises(ValueError):
+            await adapter._transcribe(pcm(1000, 200))
+        assert stream.closed == 1
+    finally:
+        await adapter.abort_stream()
+
+
+async def test_private_telephone_pcm_does_not_start_decoder(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Telephone PCM must not start a converter")
+
+    monkeypatch.setattr("voice_gateway.media.providers.pcm_http.decode_audio_stream", forbidden)
+    monkeypatch.setattr("voice_gateway.media.providers.pcm_http.resample_pcm_stream", forbidden)
+    audio = Audio([pcm(1000, 200)])
+    adapter, _ = tts("private", audio, rate=8000)
+    try:
+        assert await adapter.synthesize("Тест") == pcm(1000, 200)
+    finally:
+        await adapter.close()

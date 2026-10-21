@@ -334,3 +334,18 @@ async def test_private_telephone_pcm_does_not_start_decoder(monkeypatch):
         assert await adapter.synthesize("Тест") == pcm(1000, 200)
     finally:
         await adapter.close()
+
+
+async def test_private_stt_input_limit_rejects_before_http():
+    def forbidden(**kwargs):
+        raise AssertionError("Oversized utterance must not open HTTP")
+
+    adapter = PCMHTTPSTT(
+        PCMHTTPSettings("http://127.0.0.1:19382/v1", "test", max_input_bytes=100),
+        client_factory=forbidden,
+    )
+    try:
+        with pytest.raises(ValueError):
+            await adapter._transcribe(pcm(1000, 200))
+    finally:
+        await adapter.abort_stream()

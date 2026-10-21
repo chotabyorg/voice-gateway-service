@@ -116,7 +116,7 @@ class PCMHTTPSTT(BatchSTT):
         validate_pcm(pcm)
         if not pcm:
             return ""
-        if len(pcm) > self.queue.max_utterance_bytes:
+        if len(pcm) > min(self.queue.max_utterance_bytes, self.settings.max_input_bytes):
             raise ValueError("STT audio exceeds configured limit")
         body = {"model": self.settings.model, "response_format": "json"}
         if self.settings.language:

@@ -680,6 +680,10 @@ class SpeechKitTTS(BaseTTS):
                 size = len(data) // 2 * 2
                 pending = data[size:]
                 for offset in range(0, size, 65536):
+                    # Playback can suspend between slices of one response. Apply
+                    # the same stream deadline before handing out buffered audio.
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise TimeoutError("Media stream deadline exceeded")
                     yield data[offset : min(offset + 65536, size)]
             async with deadline_timeout(deadline):
                 await sender

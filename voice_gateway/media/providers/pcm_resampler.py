@@ -16,6 +16,9 @@ from ..completion import deadline_timeout
 _HALF = 120
 _TAPS = 2 * _HALF + 1
 _CUTOFF = 3600 / 24000
+# 20 ms of input PCM bounds each synchronous FIR batch independently of the
+# upstream HTTP chunk size. This is a work bound, not a wall-clock guarantee.
+_COMPUTE_BYTES = 960
 
 
 def _coefficients():
@@ -117,15 +120,27 @@ async def resample_pcm_stream(
                 received += len(chunk)
                 if received > max_input_bytes:
                     raise ValueError("Encoded audio exceeds configured limit")
-            pcm = converter.feed(chunk or b"", final=chunk is None)
+            pcm = bytearray()
+            data = chunk or b""
+            for offset in range(0, max(1, len(data)), _COMPUTE_BYTES):
+                async with deadline_timeout(deadline):
+                    part = converter.feed(
+                        data[offset : offset + _COMPUTE_BYTES], final=chunk is None
+                    )
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise TimeoutError("Media stream deadline exceeded")
+                    pcm.extend(part)
+                    # Yield even when upstream and downstream are immediately
+                    # ready, so input/VAD and cancellation can run between FIR batches.
+                    await asyncio.sleep(0)
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise TimeoutError("Media stream deadline exceeded")
             produced += len(pcm)
             if produced > max_output_bytes:
                 raise ValueError("Decoded audio exceeds configured limit")
             if pcm:
-                yield pcm
+                yield bytes(pcm)
             if chunk is None:
                 if not produced:
                     raise ValueError("Decoder returned empty PCM")
                 break
-            # Bounded CPU work must not starve input/VAD or barge-in callbacks.
-            await asyncio.sleep(0)

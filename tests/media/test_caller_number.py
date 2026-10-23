@@ -105,6 +105,21 @@ def test_caller_number_accepts_asserted_identity_list(value):
     assert caller_number(_invite([f"P-Asserted-Identity: {value}"])) == "+375291112233"
 
 
+@pytest.mark.parametrize("header", ["From", "P-Asserted-Identity"])
+@pytest.mark.parametrize("prefix", ["display", '"display"'])
+def test_caller_number_rejects_bounded_long_malformed_display(header, prefix):
+    received = _invite([f"{header}: {prefix}" + " " * 15000 + ">"])
+    assert len(received.wholeMsg) <= 16384
+    assert caller_number(received) == ""
+
+
+@pytest.mark.parametrize("prefix", ["display", '"display"', ""])
+def test_caller_number_preserves_long_display_whitespace(prefix):
+    received = _invite([f"From: {prefix}" + " " * 15000 + "<sip:+375291112233@gw>"])
+    assert len(received.wholeMsg) <= 16384
+    assert caller_number(received) == "+375291112233"
+
+
 def _binding(call_id):
     return TrustedVoiceBinding("owner", uuid4(), uuid4())
 

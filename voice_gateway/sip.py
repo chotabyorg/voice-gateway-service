@@ -125,7 +125,9 @@ def _identity_number(value):
     # Display names, URI hosts and header parameters are not caller numbers.
     # Extract the address first, then require a complete Belarusian subscriber.
     if "<" in value or ">" in value:
-        address = re.fullmatch(r'(?:"(?:[^"\\]|\\.)*"|[^"<>]*)\s*<([^<>]+)>\s*(?:;[^<>]*)?', value)
+        # Unquoted names already include whitespace. Giving a second adjacent
+        # repetition the same spaces makes malformed long names quadratic.
+        address = re.fullmatch(r'(?:"(?:[^"\\]|\\.)*"\s*|[^"<>]*)<([^<>]+)>\s*(?:;[^<>]*)?', value)
         if address is None:
             return ""
         value = address[1]

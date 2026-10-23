@@ -100,6 +100,48 @@ def called_did(settings, received):
     return "+" + match[1].lstrip("+")
 
 
+def _identity_values(value):
+    """Split asserted addresses without splitting quoted names or URI parameters."""
+    start, quoted, escaped, angled = 0, False, False, False
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+        elif quoted and char == "\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+        elif not quoted:
+            if char == "<":
+                angled = True
+            elif char == ">":
+                angled = False
+            elif char == "," and not angled:
+                yield value[start:index].strip()
+                start = index + 1
+    yield value[start:].strip()
+
+
+def _identity_number(value):
+    # Display names, URI hosts and header parameters are not caller numbers.
+    # Extract the address first, then require a complete Belarusian subscriber.
+    if "<" in value or ">" in value:
+        # Unquoted names already include whitespace. Giving a second adjacent
+        # repetition the same spaces makes malformed long names quadratic.
+        address = re.fullmatch(r'(?:"(?:[^"\\]|\\.)*"\s*|[^"<>]*)<([^<>]+)>\s*(?:;[^<>]*)?', value)
+        if address is None:
+            return ""
+        value = address[1]
+    match = re.fullmatch(
+        r"(?:sips?:(\+?375[0-9]{9})@[^\s@;?<>]+(?:[;?][^\s<>]*)?"
+        r"|tel:(\+?375[0-9]{9})(?:;[^\s<>]*)?)",
+        value,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return ""
+    return "+" + (match[1] or match[2]).lstrip("+")
+
+
 def caller_number(received) -> str:
     """Best-effort caller ANI from the validated INVITE; empty when absent.
 
@@ -116,10 +158,8 @@ def caller_number(received) -> str:
         if name not in {"from", "p-asserted-identity"}:
             continue
         value = line.partition(":")[2].strip()
-        match = re.search(r"(?:\+?375)([0-9]{9})", value)
-        if match is None:
-            continue
-        found = "+375" + match[1]
+        values = _identity_values(value) if name == "p-asserted-identity" else (value,)
+        found = next((number for value in values if (number := _identity_number(value))), "")
         if name == "p-asserted-identity":
             preferred = preferred or found
         else:

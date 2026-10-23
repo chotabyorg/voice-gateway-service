@@ -63,6 +63,63 @@ def test_caller_number_falls_back_to_from_and_rejects_non_belarusian():
     assert caller_number(_invite(["From: anonymous;tag=1"])) == ""
 
 
+@pytest.mark.parametrize("header", ["From", "P-Asserted-Identity"])
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('"375291112233" <sip:+375447778899@gw>;tag=1', "+375447778899"),
+        ('"Alice <sales>" <sip:+375291112233@gw>;tag=1', "+375291112233"),
+        ('"Alice \\"sales\\"" <sip:+375291112233@gw>', "+375291112233"),
+        ('"375291112233" <sip:anonymous@gw>', ""),
+        ("<sip:+3752911122334@gw>", ""),
+        ("<sip:1375291112233@gw>", ""),
+        ("<sip:anonymous@375291112233.example>", ""),
+        ("<sip:anonymous@gw>;tag=375291112233", ""),
+        ("sips:375291112233@gw;user=phone", "+375291112233"),
+        ("<tel:+375291112233>", "+375291112233"),
+    ],
+)
+def test_caller_number_uses_complete_uri_subscriber(header, value, expected):
+    assert caller_number(_invite([f"{header}: {value}"])) == expected
+
+
+def test_caller_number_invalid_asserted_subscriber_uses_valid_from():
+    received = _invite(
+        [
+            "From: <sip:+375447778899@gw>;tag=1",
+            'P-Asserted-Identity: "375291112233" <sip:anonymous@gw>',
+        ]
+    )
+    assert caller_number(received) == "+375447778899"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "<sip:+375291112233@gw>, <tel:+375291112233>",
+        "<sip:anonymous@gw>, <tel:+375291112233>",
+        '"Alice, <sales>" <sip:+375291112233@gw>, <tel:+375291112233>',
+    ],
+)
+def test_caller_number_accepts_asserted_identity_list(value):
+    assert caller_number(_invite([f"P-Asserted-Identity: {value}"])) == "+375291112233"
+
+
+@pytest.mark.parametrize("header", ["From", "P-Asserted-Identity"])
+@pytest.mark.parametrize("prefix", ["display", '"display"'])
+def test_caller_number_rejects_bounded_long_malformed_display(header, prefix):
+    received = _invite([f"{header}: {prefix}" + " " * 15000 + ">"])
+    assert len(received.wholeMsg) <= 16384
+    assert caller_number(received) == ""
+
+
+@pytest.mark.parametrize("prefix", ["display", '"display"', ""])
+def test_caller_number_preserves_long_display_whitespace(prefix):
+    received = _invite([f"From: {prefix}" + " " * 15000 + "<sip:+375291112233@gw>"])
+    assert len(received.wholeMsg) <= 16384
+    assert caller_number(received) == "+375291112233"
+
+
 def _binding(call_id):
     return TrustedVoiceBinding("owner", uuid4(), uuid4())
 
